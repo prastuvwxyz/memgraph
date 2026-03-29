@@ -1,0 +1,14 @@
+# Build output
+memgraph
+dist/
+
+# Index files (created by memgraph init/index)
+.memgraph/index.db
+.memgraph/index.db-wal
+.memgraph/index.db-shm
+
+# macOS
+.DS_Store
+
+# Go
+vendor/
