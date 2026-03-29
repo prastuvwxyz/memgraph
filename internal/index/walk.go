@@ -83,6 +83,16 @@ func Walk(db *DB, rootDir string, exclude []string, verbose bool) (updated, tota
 		}
 		f.Path = rel // store relative path for portable indexing
 
+		// Normalize outbound links from file-relative to vault-root-relative paths.
+		// e.g. from agents/intel/AGENTS.md, "../../knowledge/x.md" → "knowledge/x.md"
+		fileDir := filepath.Dir(rel)
+		for i, link := range f.Links {
+			normalized := filepath.ToSlash(filepath.Clean(filepath.Join(fileDir, link)))
+			if normalized != "." {
+				f.Links[i] = normalized
+			}
+		}
+
 		didUpdate, indexErr := db.IndexFile(f)
 		if indexErr != nil {
 			return fmt.Errorf("index %s: %w", rel, indexErr)

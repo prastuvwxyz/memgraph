@@ -255,6 +255,86 @@ Patterns in `.memgraphignore` are merged with the `exclude` list in `config.toml
 
 ---
 
+## Writing Files for Best Results
+
+memgraph scores results using filename, BM25 full-text, tag bonus, and graph boost. The more structure your files have, the better the ranking.
+
+### Frontmatter tags
+
+Add a `tags:` field to any file you want to surface precisely. Tags get a **+2.0 bonus per exact match** — higher than any BM25 body hit.
+
+```markdown
+---
+tags: [openclaw, setup, ssh, multi-agent]
+---
+
+# OpenClaw Setup
+```
+
+Tag naming tips:
+- Use lowercase, short terms a query would naturally include
+- Name the subject: `[yuha, intel, agent]` not `[file, notes, info]`
+- 3–6 tags is enough — diminishing returns beyond that
+
+### Staleness header
+
+Add a `<!-- last-verified -->` comment after the title to track how fresh the file is:
+
+```markdown
+---
+tags: [openclaw, setup]
+---
+
+# OpenClaw Setup
+<!-- last-verified: 2026-03-29 | review-by: 2026-04-29 -->
+```
+
+memgraph indexes this date and exposes it in `--format json` output.
+
+### Cross-file links (graph)
+
+Links between files power `memgraph graph` and `memgraph serve`. Use standard relative markdown links — memgraph normalizes them to vault-root paths automatically:
+
+```markdown
+<!-- From: knowledge/openclaw-setup-complete.md -->
+
+See also [Prastya Group context](../knowledge/prastya-group.md)
+and the [Yuha standing orders](../agents/intel/AGENTS.md).
+```
+
+```markdown
+<!-- From: MEMORY.md (vault root) -->
+
+- [knowledge/openclaw-setup-complete.md](knowledge/openclaw-setup-complete.md) — current setup
+- [USER.md](USER.md) — who I am
+```
+
+Or use `[[wikilinks]]` (Obsidian-style) — both formats are supported:
+
+```markdown
+See [[knowledge/openclaw-setup-complete]] and [[agents/intel/AGENTS]].
+```
+
+**What makes a good hub file:** index files, MEMORY.md, and knowledge summaries should link out to the files they describe. This creates the graph structure — hub files become highly connected nodes, detail files become leaves.
+
+### Full example
+
+```markdown
+---
+tags: [openclaw, setup, ssh, multi-agent, stella]
+---
+
+# OpenClaw Setup — Prastya Group
+<!-- last-verified: 2026-03-29 | review-by: 2026-04-29 -->
+
+Current setup: Stella + [Jiwoo](../agents/lead-engineer/IDENTITY.md) +
+[Wasawho](../agents/software-engineer/IDENTITY.md) + [Yuha](../agents/intel/IDENTITY.md).
+
+See [Prastya Group context](prastya-group.md) for company background.
+```
+
+---
+
 ## For AI Agents
 
 memgraph lets an AI agent retrieve relevant context from a large note vault without loading every file into the prompt.
