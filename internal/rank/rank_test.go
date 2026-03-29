@@ -74,7 +74,7 @@ func TestSearchFindsRelevantFile(t *testing.T) {
 	insertNote(t, db, "/notes/golang-tips.md", "Golang Tips", "goroutines channels concurrency", []string{"golang"}, nil)
 	insertNote(t, db, "/notes/python-basics.md", "Python Basics", "loops variables print", []string{"python"}, nil)
 
-	results, err := Search(db, "golang", 5)
+	results, err := Search(db, "golang", SearchOpts{TopN: 5})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestFilenameScoreBoostPathMatches(t *testing.T) {
 	insertNote(t, db, "/notes/openclaw-setup.md", "OpenClaw Setup", "openclaw agent config", []string{}, nil)
 	insertNote(t, db, "/notes/random-note.md", "Random Note", "openclaw is mentioned here", []string{}, nil)
 
-	results, err := Search(db, "openclaw", 5)
+	results, err := Search(db, "openclaw", SearchOpts{TopN: 5})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestTagBonusApplied(t *testing.T) {
 	insertNote(t, db, "/notes/with-tag.md", "With Tag", "some content about stellar", []string{"stellar"}, nil)
 	insertNote(t, db, "/notes/without-tag.md", "Without Tag", "some content about stellar systems", []string{}, nil)
 
-	results, err := Search(db, "stellar", 5)
+	results, err := Search(db, "stellar", SearchOpts{TopN: 5})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestEmptyQueryReturnsEmpty(t *testing.T) {
 	db := setupDB(t)
 	insertNote(t, db, "/notes/some-note.md", "Some Note", "body text", []string{}, nil)
 
-	results, err := Search(db, "", 5)
+	results, err := Search(db, "", SearchOpts{TopN: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestEmptyQueryReturnsEmpty(t *testing.T) {
 	}
 
 	// Whitespace-only also empty.
-	results, err = Search(db, "   ", 5)
+	results, err = Search(db, "   ", SearchOpts{TopN: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestTopNRespected(t *testing.T) {
 		)
 	}
 
-	results, err := Search(db, "concurrency", 3)
+	results, err := Search(db, "concurrency", SearchOpts{TopN: 3})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestSpecialCharsDoNotPanic(t *testing.T) {
 	for _, q := range queries {
 		t.Run(q, func(t *testing.T) {
 			// Should not panic.
-			_, err := Search(db, q, 5)
+			_, err := Search(db, q, SearchOpts{TopN: 5})
 			// Errors are acceptable; panics are not.
 			_ = err
 		})
@@ -225,7 +225,7 @@ func TestDefaultTopN(t *testing.T) {
 		)
 	}
 
-	results, err := Search(db, "default", 0)
+	results, err := Search(db, "default", SearchOpts{TopN: 0})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestGraphBoostLinkedResults(t *testing.T) {
 	insertNote(t, db, "/notes/note-b.md", "Note B", "graph boost test content linked", []string{}, nil)
 	insertNote(t, db, "/notes/note-c.md", "Note C", "graph boost test content unlinked", []string{}, nil)
 
-	results, err := Search(db, "graph boost test", 10)
+	results, err := Search(db, "graph boost test", SearchOpts{TopN: 10})
 	if err != nil {
 		t.Fatalf("search error: %v", err)
 	}

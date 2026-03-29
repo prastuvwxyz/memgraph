@@ -117,8 +117,19 @@ exclude = ["*.log"]
 	if ws.Config.Format != "json" {
 		t.Errorf("Format: want json, got %s", ws.Config.Format)
 	}
-	if len(ws.Config.Exclude) != 1 || ws.Config.Exclude[0] != "*.log" {
-		t.Errorf("Exclude: want [*.log], got %v", ws.Config.Exclude)
+	// New behavior: project exclude list is appended to defaults, not replacing them.
+	foundLog := false
+	for _, e := range ws.Config.Exclude {
+		if e == "*.log" {
+			foundLog = true
+			break
+		}
+	}
+	if !foundLog {
+		t.Errorf("Exclude: expected *.log to be present, got %v", ws.Config.Exclude)
+	}
+	if len(ws.Config.Exclude) <= 1 {
+		t.Errorf("Exclude: expected defaults + *.log, got only %v", ws.Config.Exclude)
 	}
 }
 
