@@ -1,5 +1,5 @@
 # Build output
-memgraph
+/memgraph
 dist/
 
 # Index files (created by memgraph init/index)
