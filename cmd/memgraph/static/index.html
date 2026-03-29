@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memgraph</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #d4d4d4;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #graph-container {
+      position: fixed;
+      inset: 0;
+      transition: right 0.3s ease;
+    }
+
+    #graph-container.sidebar-open {
+      right: 300px;
+    }
+
+    svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Controls overlay */
+    #controls {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #search-box {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 6px;
+      color: #d4d4d4;
+      font-size: 13px;
+      padding: 8px 12px;
+      width: 220px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    #search-box::placeholder { color: #555; }
+
+    #search-box:focus {
+      border-color: #4a4d6a;
+    }
+
+    #stats {
+      font-size: 11px;
+      color: #555;
+      padding-left: 2px;
+    }
+
+    /* Legend */
+    #legend {
+      position: fixed;
+      bottom: 20px;
+      left: 16px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      background: rgba(26, 29, 39, 0.85);
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      backdrop-filter: blur(4px);
+    }
+
+    #legend-title {
+      font-size: 10px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      color: #aaa;
+    }
+
+    .legend-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Sidebar */
+    #sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 300px;
+      height: 100vh;
+      background: #1a1d27;
+      border-left: 1px solid #2a2d3a;
+      z-index: 20;
+      transform: translateX(100%);
+      transition: transform 0.3s ease;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #sidebar.open {
+      transform: translateX(0);
+    }
+
+    #sidebar-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 18px 16px 14px;
+      border-bottom: 1px solid #2a2d3a;
+      gap: 10px;
+    }
+
+    #sidebar-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #e8e8e8;
+      line-height: 1.3;
+      word-break: break-word;
+    }
+
+    #sidebar-close {
+      background: none;
+      border: none;
+      color: #555;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      transition: color 0.15s;
+    }
+
+    #sidebar-close:hover { color: #aaa; }
+
+    #sidebar-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 16px;
+      scrollbar-width: thin;
+      scrollbar-color: #2a2d3a transparent;
+    }
+
+    #sidebar-body::-webkit-scrollbar { width: 4px; }
+    #sidebar-body::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 2px; }
+
+    .sidebar-section {
+      margin-bottom: 18px;
+    }
+
+    .sidebar-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 7px;
+    }
+
+    #sidebar-path {
+      font-size: 11px;
+      color: #7c8cf8;
+      word-break: break-all;
+      font-family: 'Consolas', 'Courier New', monospace;
+    }
+
+    #sidebar-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .tag-pill {
+      background: #252836;
+      border: 1px solid #2a2d3a;
+      border-radius: 12px;
+      font-size: 11px;
+      color: #9cdcfe;
+      padding: 2px 9px;
+    }
+
+    .link-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .link-item {
+      font-size: 12px;
+      color: #7c8cf8;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      word-break: break-all;
+      transition: background 0.15s;
+    }
+
+    .link-item:hover {
+      background: #252836;
+      color: #a0aeff;
+    }
+
+    .empty-hint {
+      font-size: 11px;
+      color: #444;
+      font-style: italic;
+    }
+
+    /* Graph elements */
+    .node circle {
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .node text {
+      pointer-events: none;
+      user-select: none;
+      transition: opacity 0.2s;
+    }
+
+    .link {
+      transition: opacity 0.2s;
+    }
+
+    .node.dimmed circle { opacity: 0.12; }
+    .node.dimmed text { opacity: 0.06; }
+    .link.dimmed { opacity: 0.04; }
+
+    .node.highlighted circle {
+      stroke: #fff !important;
+      stroke-width: 2px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="controls">
+  <input id="search-box" type="text" placeholder="Search nodes…" autocomplete="off" />
+  <div id="stats"></div>
+</div>
+
+<div id="legend">
+  <div id="legend-title">Groups</div>
+  <div id="legend-items"></div>
+</div>
+
+<div id="graph-container">
+  <svg id="graph"></svg>
+</div>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <div id="sidebar-title"></div>
+    <button id="sidebar-close" aria-label="Close sidebar">&#x2715;</button>
+  </div>
+  <div id="sidebar-body">
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Path</div>
+      <div id="sidebar-path"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Tags</div>
+      <div id="sidebar-tags"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Links</div>
+      <div id="sidebar-outbound" class="link-list"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Backlinks</div>
+      <div id="sidebar-backlinks" class="link-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLOR_MAP = {
+  knowledge: '#7c8cf8',
+  memory:    '#4ec9b0',
+  agents:    '#ce9178',
+  contexts:  '#dcdcaa',
+  research:  '#9cdcfe',
+  runbooks:  '#f48771',
+  projects:  '#c586c0',
+  skills:    '#d7ba7d',
+  root:      '#888888',
+  default:   '#666666',
+};
+
+function nodeColor(d) {
+  return COLOR_MAP[d.group] || COLOR_MAP.default;
+}
+
+function nodeRadius(d) {
+  return Math.max(4, Math.min(14, 4 + d.links * 1.5));
+}
+
+function basename(id) {
+  const part = String(id).split('/').pop();
+  return part.endsWith('.md') ? part.slice(0, -3) : part;
+}
+
+function clearChildren(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function makeEmptyHint(text) {
+  const span = document.createElement('span');
+  span.className = 'empty-hint';
+  span.textContent = text;
+  return span;
+}
+
+let graphData = { nodes: [], links: [] };
+let simulation;
+let svgEl, gEl;
+let nodeEls, linkEls;
+let selectedNode = null;
+let searchActive = false;
+
+const sidebar = document.getElementById('sidebar');
+const graphContainer = document.getElementById('graph-container');
+
+function closeSidebar() {
+  sidebar.classList.remove('open');
+  graphContainer.classList.remove('sidebar-open');
+  selectedNode = null;
+  clearHighlight();
+}
+
+document.getElementById('sidebar-close').addEventListener('click', closeSidebar);
+
+function openSidebar(d) {
+  selectedNode = d;
+
+  document.getElementById('sidebar-title').textContent = d.title || basename(d.id);
+  document.getElementById('sidebar-path').textContent = d.id;
+
+  // Tags
+  const tagsEl = document.getElementById('sidebar-tags');
+  clearChildren(tagsEl);
+  if (d.tags && d.tags.length > 0) {
+    d.tags.forEach(t => {
+      const pill = document.createElement('span');
+      pill.className = 'tag-pill';
+      pill.textContent = t;
+      tagsEl.appendChild(pill);
+    });
+  } else {
+    tagsEl.appendChild(makeEmptyHint('none'));
+  }
+
+  // Outbound links (this node -> others)
+  const outboundEl = document.getElementById('sidebar-outbound');
+  clearChildren(outboundEl);
+  const outbound = graphData.links
+    .filter(l => (l.source.id || l.source) === d.id)
+    .map(l => l.target.id || l.target);
+  if (outbound.length > 0) {
+    outbound.forEach(tid => {
+      const item = document.createElement('div');
+      item.className = 'link-item';
+      item.textContent = basename(tid);
+      item.title = tid;
+      item.addEventListener('click', () => focusNode(tid));
+      outboundEl.appendChild(item);
+    });
+  } else {
+    outboundEl.appendChild(makeEmptyHint('none'));
+  }
+
+  // Backlinks (others -> this node)
+  const backlinksEl = document.getElementById('sidebar-backlinks');
+  clearChildren(backlinksEl);
+  const backlinks = graphData.links
+    .filter(l => (l.target.id || l.target) === d.id)
+    .map(l => l.source.id || l.source);
+  if (backlinks.length > 0) {
+    backlinks.forEach(sid => {
+      const item = document.createElement('div');
+      item.className = 'link-item';
+      item.textContent = basename(sid);
+      item.title = sid;
+      item.addEventListener('click', () => focusNode(sid));
+      backlinksEl.appendChild(item);
+    });
+  } else {
+    backlinksEl.appendChild(makeEmptyHint('none'));
+  }
+
+  sidebar.classList.add('open');
+  graphContainer.classList.add('sidebar-open');
+}
+
+function highlightNode(d) {
+  if (!d) { clearHighlight(); return; }
+
+  const neighborIds = new Set([d.id]);
+  const neighborLinkIndices = new Set();
+
+  graphData.links.forEach((l, i) => {
+    const sid = l.source.id || l.source;
+    const tid = l.target.id || l.target;
+    if (sid === d.id || tid === d.id) {
+      neighborIds.add(sid);
+      neighborIds.add(tid);
+      neighborLinkIndices.add(i);
+    }
+  });
+
+  nodeEls.classed('dimmed', nd => !neighborIds.has(nd.id));
+  nodeEls.classed('highlighted', nd => neighborIds.has(nd.id));
+  linkEls.classed('dimmed', (_, i) => !neighborLinkIndices.has(i));
+}
+
+function clearHighlight() {
+  if (!nodeEls) return;
+  nodeEls.classed('dimmed', false);
+  nodeEls.classed('highlighted', false);
+  linkEls.classed('dimmed', false);
+}
+
+function focusNode(id) {
+  const d = graphData.nodes.find(n => n.id === id);
+  if (!d) return;
+
+  const width = svgEl.node().clientWidth;
+  const height = svgEl.node().clientHeight;
+  const scale = 1.4;
+  const tx = width / 2 - scale * d.x;
+  const ty = height / 2 - scale * d.y;
+
+  svgEl.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(tx, ty).scale(scale)
+  );
+
+  openSidebar(d);
+  highlightNode(d);
+}
+
+// Search
+const searchBox = document.getElementById('search-box');
+searchBox.addEventListener('input', () => {
+  const q = searchBox.value.trim().toLowerCase();
+  if (!q) {
+    searchActive = false;
+    if (!selectedNode) clearHighlight();
+    return;
+  }
+  searchActive = true;
+  selectedNode = null;
+  sidebar.classList.remove('open');
+  graphContainer.classList.remove('sidebar-open');
+
+  nodeEls.classed('dimmed', d => {
+    const match = d.id.toLowerCase().includes(q)
+      || (d.title || '').toLowerCase().includes(q)
+      || (d.tags || []).some(t => t.toLowerCase().includes(q));
+    return !match;
+  });
+  nodeEls.classed('highlighted', d => {
+    return d.id.toLowerCase().includes(q)
+      || (d.title || '').toLowerCase().includes(q)
+      || (d.tags || []).some(t => t.toLowerCase().includes(q));
+  });
+  linkEls.classed('dimmed', true);
+});
+
+let zoom;
+
+function buildGraph(data) {
+  graphData = data;
+
+  // Stats
+  const statsEl = document.getElementById('stats');
+  statsEl.textContent = data.nodes.length + ' files \u00b7 ' + data.links.length + ' links';
+
+  // Legend
+  const groupsPresent = [...new Set(data.nodes.map(n => n.group || 'default'))].sort();
+  const legendItems = document.getElementById('legend-items');
+  clearChildren(legendItems);
+  groupsPresent.forEach(g => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    const dot = document.createElement('div');
+    dot.className = 'legend-dot';
+    dot.style.background = COLOR_MAP[g] || COLOR_MAP.default;
+    const label = document.createElement('span');
+    label.textContent = g;
+    item.appendChild(dot);
+    item.appendChild(label);
+    legendItems.appendChild(item);
+  });
+
+  // SVG setup
+  svgEl = d3.select('#graph');
+  svgEl.selectAll('*').remove();
+
+  const width = svgEl.node().clientWidth;
+  const height = svgEl.node().clientHeight;
+
+  zoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on('zoom', (event) => {
+      gEl.attr('transform', event.transform);
+    });
+
+  svgEl.call(zoom);
+
+  svgEl.on('click', (event) => {
+    if (event.target === svgEl.node() || event.target.tagName === 'rect') {
+      if (!searchActive) {
+        closeSidebar();
+      }
+    }
+  });
+
+  // Background rect to catch clicks on empty space
+  svgEl.append('rect')
+    .attr('width', '100%')
+    .attr('height', '100%')
+    .attr('fill', 'transparent');
+
+  gEl = svgEl.append('g');
+
+  // Simulation
+  simulation = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(data.links)
+      .id(d => d.id)
+      .distance(60)
+      .strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-120))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collide', d3.forceCollide().radius(d => nodeRadius(d) + 4));
+
+  // Links
+  linkEls = gEl.append('g')
+    .attr('class', 'links')
+    .selectAll('line')
+    .data(data.links)
+    .join('line')
+    .attr('class', 'link')
+    .attr('stroke', '#2a2d3a')
+    .attr('stroke-opacity', 0.5)
+    .attr('stroke-width', 1);
+
+  // Nodes
+  nodeEls = gEl.append('g')
+    .attr('class', 'nodes')
+    .selectAll('g')
+    .data(data.nodes)
+    .join('g')
+    .attr('class', 'node')
+    .call(
+      d3.drag()
+        .on('start', (event, d) => {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        })
+        .on('drag', (event, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on('end', (event, d) => {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        })
+    )
+    .on('click', (event, d) => {
+      event.stopPropagation();
+      searchActive = false;
+      searchBox.value = '';
+      openSidebar(d);
+      highlightNode(d);
+    });
+
+  nodeEls.append('circle')
+    .attr('r', d => nodeRadius(d))
+    .attr('fill', d => nodeColor(d))
+    .attr('stroke', d => nodeColor(d))
+    .attr('stroke-width', 1.5);
+
+  nodeEls.append('text')
+    .attr('x', d => nodeRadius(d) + 4)
+    .attr('y', 4)
+    .attr('font-size', '10px')
+    .attr('fill', '#888')
+    .text(d => basename(d.id));
+
+  simulation.on('tick', () => {
+    linkEls
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+
+    nodeEls.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
+  });
+}
+
+// Fetch and render
+fetch('/api/graph')
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(data => buildGraph(data))
+  .catch(err => {
+    console.error('Failed to load graph data:', err);
+    const statsEl = document.getElementById('stats');
+    statsEl.textContent = 'Failed to load graph data';
+  });
+</script>
+</body>
+</html>

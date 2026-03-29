@@ -12,6 +12,12 @@ import (
 
 const defaultTopN = 5
 
+// SearchOpts configures a Search call.
+type SearchOpts struct {
+	TopN   int    // max results (0 = default 5)
+	Prefix string // if non-empty, restrict to paths with this prefix (e.g. "contexts/work")
+}
+
 // Result is a single search result with a blended relevance score.
 type Result struct {
 	Path         string
@@ -35,10 +41,8 @@ type raw struct {
 }
 
 // Search queries the index and returns ranked results.
-// db is a *sql.DB obtained from the index package.
-// query is the natural-language search string.
-// topN is the max results to return (0 = default 5).
-func Search(db *sql.DB, query string, topN int) ([]Result, error) {
+func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
+	topN := opts.TopN
 	if topN <= 0 {
 		topN = defaultTopN
 	}
@@ -52,7 +56,7 @@ func Search(db *sql.DB, query string, topN int) ([]Result, error) {
 	terms := tokenize(query)
 
 	// 2. FTS5 BM25 search.
-	rows, err := ftsSearch(db, query)
+	rows, err := ftsSearch(db, query, opts.Prefix)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
@@ -136,22 +140,28 @@ func Search(db *sql.DB, query string, topN int) ([]Result, error) {
 	return results, nil
 }
 
-// ftsSearch runs the FTS5 BM25 query, falling back to escaped query on error.
-func ftsSearch(db *sql.DB, query string) ([]*raw, error) {
-	const q = `
+// ftsSearch runs the FTS5 BM25 query with optional path prefix filter.
+func ftsSearch(db *sql.DB, query string, prefix string) ([]*raw, error) {
+	base := `
 		SELECT n.id, n.path, n.title, n.tags, n.last_verified,
 		       -bm25(notes_fts) as bm25_score
 		FROM notes_fts
 		JOIN notes n ON notes_fts.rowid = n.id
-		WHERE notes_fts MATCH ?
-		ORDER BY bm25_score DESC
-		LIMIT 50`
+		WHERE notes_fts MATCH ?`
 
-	rows, err := db.Query(q, query)
+	args := []any{query}
+	if prefix != "" {
+		base += ` AND n.path LIKE ?`
+		args = append(args, prefix+"/%")
+	}
+	base += ` ORDER BY bm25_score DESC LIMIT 50`
+
+	rows, err := db.Query(base, args...)
 	if err != nil {
 		// Retry with escaped query.
 		escaped := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
-		rows, err = db.Query(q, escaped)
+		args[0] = escaped
+		rows, err = db.Query(base, args...)
 		if err != nil {
 			return nil, err
 		}

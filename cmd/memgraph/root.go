@@ -28,7 +28,7 @@ func Execute(version string) {
 		},
 	}
 
-	rootCmd.AddCommand(initCmd, indexCmd, queryCmd, graphCmd, statsCmd, versionCmd)
+	rootCmd.AddCommand(initCmd, indexCmd, queryCmd, graphCmd, statsCmd, serveCmd, versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

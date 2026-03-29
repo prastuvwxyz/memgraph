@@ -48,7 +48,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	workspace := config.LoadOrDefault(abs)
 
 	// Resolve context root if --ctx given
-	searchDir := abs
+	var ctxPrefix string
 	if queryCtx != "" {
 		ctxDef, ok := workspace.Config.Contexts[queryCtx]
 		if !ok {
@@ -58,9 +58,10 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if !filepath.IsAbs(ctxRoot) {
 			ctxRoot = filepath.Join(workspace.Root, ctxRoot)
 		}
-		searchDir = ctxRoot
+		if rel, relErr := filepath.Rel(workspace.Root, ctxRoot); relErr == nil && rel != "." {
+			ctxPrefix = filepath.ToSlash(rel)
+		}
 	}
-	_ = searchDir // used for context filtering if needed
 
 	dbPath := filepath.Join(workspace.Root, ".memgraph", "index.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -74,7 +75,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	results, err := rank.Search(db.SqlDB(), query, queryTop)
+	results, err := rank.Search(db.SqlDB(), query, rank.SearchOpts{TopN: queryTop, Prefix: ctxPrefix})
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
