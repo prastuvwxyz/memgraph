@@ -9,13 +9,13 @@
 ---
 
 ```
-$ memgraph query "openclaw setup"
+$ memgraph query "kubernetes ingress"
 
-Path                                    Score    Tags                  Reason
--------------------------------------------------------------------------- ----
-knowledge/openclaw-access.md            0.9241   setup, agent          filename + tag match
-memory/2026-03-28.md                    0.7812   openclaw, infra       body match: "openclaw setup"
-project_openclaw_access.md              0.6530   openclaw              body match: "access"
+Path                                  Score    Tags                    Reason
+----------------------------------------------------------------------------------
+knowledge/kubernetes-ingress.md       0.9241   kubernetes, networking  filename + tag match
+runbooks/cluster-setup.md             0.7812   kubernetes, infra       body match: "ingress"
+projects/api-gateway/design.md        0.6530   kubernetes              body match: "ingress"
 ```
 
 ---
@@ -50,7 +50,7 @@ INSTALL_DIR=~/.local/bin curl -sSL https://raw.githubusercontent.com/prastuvwxyz
 ### Go install
 
 ```sh
-go install github.com/prastuvwxyz/memgraph@latest
+go install github.com/prastuvwxyz/memgraph/cmd/memgraph@latest
 ```
 
 ### Manual binary download
@@ -86,13 +86,13 @@ memgraph init ~/notes
 memgraph index ~/notes
 
 # 3. Query — search with BM25 ranking
-memgraph query "openclaw setup"
+memgraph query "kubernetes ingress"
 
 # 4. Query as JSON — for piping into AI agents or scripts
 memgraph query "deploy workflow" --format json
 
 # 5. Show links — outbound and backlinks for a specific file
-memgraph graph knowledge/openclaw-access.md
+memgraph graph knowledge/kubernetes-ingress.md
 ```
 
 ---
@@ -126,9 +126,9 @@ Search the index using BM25 full-text search, boosted by filename and tag matche
 ```sh
 memgraph query "kubernetes ingress"
 memgraph query "deploy workflow" --top 10
-memgraph query "stella setup" --ctx work
+memgraph query "database migration" --ctx work
 memgraph query "agent pipeline" --format json
-memgraph query "daily brief" --format paths
+memgraph query "auth setup" --format paths
 ```
 
 | Flag | Default | Description |
@@ -142,19 +142,31 @@ memgraph query "daily brief" --format paths
 Show outbound wikilinks and backlinks for a file.
 
 ```sh
-memgraph graph knowledge/openclaw-access.md
+memgraph graph knowledge/kubernetes-ingress.md
 ```
 
 ```
-graph: knowledge/openclaw-access.md
+graph: knowledge/kubernetes-ingress.md
 
 Outbound links (2):
-  -> project_openclaw_access.md
-  -> knowledge/prastya-com-deploy.md
+  -> runbooks/cluster-setup.md
+  -> decisions/networking.md
 
 Backlinks (1):
-  <- memory/2026-03-28.md
+  <- knowledge/INDEX.md
 ```
+
+### `serve`
+
+Start a local web server with an interactive force-directed graph UI.
+
+```sh
+memgraph serve              # opens http://localhost:7331
+memgraph serve --port 8080  # custom port
+memgraph serve --open=false # don't auto-open browser
+```
+
+Nodes are colored by directory group. Click a node to see its links and tags. Search to highlight matching nodes.
 
 ### `stats`
 
@@ -186,13 +198,13 @@ Define contexts in `.memgraph/config.toml`:
 
 ```toml
 [contexts.work]
-root = "contexts/work"
+root = "work"
 
 [contexts.personal]
-root = "contexts/personal"
+root = "personal"
 
-[contexts.nalar]
-root = "projects/nalar"
+[contexts.infra]
+root = "projects/infra"
 ```
 
 Then query within a context:
@@ -200,6 +212,7 @@ Then query within a context:
 ```sh
 memgraph query "deploy pipeline" --ctx work
 memgraph query "travel plans" --ctx personal
+memgraph query "database setup" --ctx infra
 ```
 
 ---
@@ -229,10 +242,10 @@ exclude = [
 
 # Named contexts for --ctx flag (optional)
 # [contexts.work]
-# root = "contexts/work"
+# root = "work"
 #
 # [contexts.personal]
-# root = "."
+# root = "personal"
 ```
 
 The index database is stored at `.memgraph/index.db` and is safe to delete — `memgraph index` will rebuild it from scratch.
@@ -265,15 +278,15 @@ Add a `tags:` field to any file you want to surface precisely. Tags get a **+2.0
 
 ```markdown
 ---
-tags: [openclaw, setup, ssh, multi-agent]
+tags: [kubernetes, ingress, nginx, networking]
 ---
 
-# OpenClaw Setup
+# Kubernetes Ingress Setup
 ```
 
 Tag naming tips:
 - Use lowercase, short terms a query would naturally include
-- Name the subject: `[yuha, intel, agent]` not `[file, notes, info]`
+- Name the subject: `[postgres, database, migration]` not `[notes, file, info]`
 - 3–6 tags is enough — diminishing returns beyond that
 
 ### Staleness header
@@ -282,11 +295,11 @@ Add a `<!-- last-verified -->` comment after the title to track how fresh the fi
 
 ```markdown
 ---
-tags: [openclaw, setup]
+tags: [kubernetes, ingress, nginx]
 ---
 
-# OpenClaw Setup
-<!-- last-verified: 2026-03-29 | review-by: 2026-04-29 -->
+# Kubernetes Ingress Setup
+<!-- last-verified: 2026-01-15 | review-by: 2026-04-15 -->
 ```
 
 memgraph indexes this date and exposes it in `--format json` output.
@@ -296,41 +309,42 @@ memgraph indexes this date and exposes it in `--format json` output.
 Links between files power `memgraph graph` and `memgraph serve`. Use standard relative markdown links — memgraph normalizes them to vault-root paths automatically:
 
 ```markdown
-<!-- From: knowledge/openclaw-setup-complete.md -->
+<!-- From: knowledge/kubernetes-ingress.md -->
 
-See also [Prastya Group context](../knowledge/prastya-group.md)
-and the [Yuha standing orders](../agents/intel/AGENTS.md).
+See the [cluster setup runbook](../runbooks/cluster-setup.md)
+and [networking decisions](../decisions/networking.md).
 ```
 
 ```markdown
-<!-- From: MEMORY.md (vault root) -->
+<!-- From: INDEX.md (vault root) -->
 
-- [knowledge/openclaw-setup-complete.md](knowledge/openclaw-setup-complete.md) — current setup
-- [USER.md](USER.md) — who I am
+- [knowledge/kubernetes-ingress.md](knowledge/kubernetes-ingress.md) — ingress configuration guide
+- [knowledge/postgres-setup.md](knowledge/postgres-setup.md) — database setup and migrations
+- [runbooks/deploy.md](runbooks/deploy.md) — production deploy process
 ```
 
 Or use `[[wikilinks]]` (Obsidian-style) — both formats are supported:
 
 ```markdown
-See [[knowledge/openclaw-setup-complete]] and [[agents/intel/AGENTS]].
+See [[knowledge/kubernetes-ingress]] and [[runbooks/cluster-setup]].
 ```
 
-**What makes a good hub file:** index files, MEMORY.md, and knowledge summaries should link out to the files they describe. This creates the graph structure — hub files become highly connected nodes, detail files become leaves.
+**What makes a good hub file:** index files and knowledge summaries should link out to the files they describe. Hub files become highly connected nodes in the graph; detail files become leaves.
 
 ### Full example
 
 ```markdown
 ---
-tags: [openclaw, setup, ssh, multi-agent, stella]
+tags: [postgres, database, setup, migration, production]
 ---
 
-# OpenClaw Setup — Prastya Group
-<!-- last-verified: 2026-03-29 | review-by: 2026-04-29 -->
+# PostgreSQL Setup — Production
+<!-- last-verified: 2026-01-15 | review-by: 2026-04-15 -->
 
-Current setup: Stella + [Jiwoo](../agents/lead-engineer/IDENTITY.md) +
-[Wasawho](../agents/software-engineer/IDENTITY.md) + [Yuha](../agents/intel/IDENTITY.md).
+Managed via [CloudNativePG](../knowledge/cnpg.md) on Kubernetes.
+See [cluster setup](../runbooks/cluster-setup.md) before running migrations.
 
-See [Prastya Group context](prastya-group.md) for company background.
+Related: [backup strategy](../runbooks/postgres-backup.md) · [connection pooling](../knowledge/pgbouncer.md)
 ```
 
 ---
@@ -342,22 +356,22 @@ memgraph lets an AI agent retrieve relevant context from a large note vault with
 **Retrieve top files as JSON:**
 
 ```sh
-memgraph query "openclaw setup" --format json --top 3
+memgraph query "deploy workflow" --format json --top 3
 ```
 
 ```json
 [
   {
-    "path": "knowledge/openclaw-access.md",
+    "path": "runbooks/deploy.md",
     "score": 0.9241,
-    "tags": ["setup", "agent"],
+    "tags": ["deploy", "ci", "production"],
     "reason": "filename + tag match"
   },
   {
-    "path": "memory/2026-03-28.md",
+    "path": "knowledge/kubernetes-ingress.md",
     "score": 0.7812,
-    "tags": ["openclaw", "infra"],
-    "reason": "body match: \"openclaw setup\""
+    "tags": ["kubernetes", "networking"],
+    "reason": "body match: \"deploy workflow\""
   }
 ]
 ```
@@ -365,13 +379,13 @@ memgraph query "openclaw setup" --format json --top 3
 **Retrieve file paths only** (for `cat`-ing relevant files into a prompt):
 
 ```sh
-memgraph query "openclaw setup" --format paths --top 5
+memgraph query "deploy workflow" --format paths --top 5
 ```
 
 ```
-knowledge/openclaw-access.md
-memory/2026-03-28.md
-project_openclaw_access.md
+runbooks/deploy.md
+knowledge/kubernetes-ingress.md
+decisions/deploy-strategy.md
 ```
 
 A typical agent pattern: run `memgraph query` first, read only the returned files, then respond. This keeps context windows tight on large vaults.
