@@ -27,18 +27,13 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-    mod_timestamp: "{{ .CommitTimestamp }}"
 
 universal_binaries:
-  - id: memgraph-universal
-    ids: [memgraph]
+  - ids: [memgraph]
     replace: true
-    name_template: memgraph
 
 archives:
-  - id: default
-    ids: [memgraph, memgraph-universal]
-    format: tar.gz
+  - format: tar.gz
     format_overrides:
       - goos: windows
         format: zip
@@ -52,14 +47,13 @@ checksum:
 
 changelog:
   sort: asc
-  use: github
+  use: git
   filters:
     exclude:
       - "^docs:"
       - "^test:"
       - "^chore:"
-      - Merge pull request
-      - Merge branch
+      - "^Merge "
 
 release:
   github:
