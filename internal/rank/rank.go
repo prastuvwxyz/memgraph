@@ -61,18 +61,27 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
 
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
 	// Index by path for dedup and graph boost lookup.
-	byPath := make(map[string]*raw, len(rows))
-	ordered := make([]*raw, 0, len(rows))
+	byPath := make(map[string]*raw)
+	ordered := make([]*raw, 0)
 	for _, r := range rows {
 		if _, exists := byPath[r.path]; !exists {
 			byPath[r.path] = r
 			ordered = append(ordered, r)
 		}
+	}
+
+	// Secondary: find files that have an exact tag match but weren't in FTS5.
+	tagRows, err := tagOnlySearch(db, terms, opts.Prefix, byPath)
+	if err == nil {
+		for _, r := range tagRows {
+			byPath[r.path] = r
+			ordered = append(ordered, r)
+		}
+	}
+
+	if len(ordered) == 0 {
+		return nil, nil
 	}
 
 	// 3. Filename score.
@@ -252,6 +261,51 @@ func parseTags(tagsJSON string) []string {
 		return nil
 	}
 	return tags
+}
+
+// tagOnlySearch finds files that have an exact tag match for any search term
+// but were not returned by FTS5 (i.e. the term only appears in tags, not body/title).
+// Returns raw entries with tagBonus pre-set and bm25=0.
+func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string]*raw) ([]*raw, error) {
+	if len(terms) == 0 {
+		return nil, nil
+	}
+
+	// Build WHERE: tags LIKE '%"term"%' for each term, OR-combined.
+	clauses := make([]string, 0, len(terms))
+	args := make([]any, 0, len(terms)+1)
+	for _, t := range terms {
+		clauses = append(clauses, `tags LIKE ?`)
+		args = append(args, `%"`+t+`"%`)
+	}
+
+	q := `SELECT path, title, tags, last_verified FROM notes WHERE (` +
+		strings.Join(clauses, " OR ") + `)`
+
+	if prefix != "" {
+		q += ` AND path LIKE ?`
+		args = append(args, prefix+"/%")
+	}
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*raw
+	for rows.Next() {
+		var r raw
+		if err := rows.Scan(&r.path, &r.title, &r.tagsJSON, &r.lastVerified); err != nil {
+			return nil, err
+		}
+		if already[r.path] != nil {
+			continue // already scored by FTS5
+		}
+		r.tagBonus = tagBonusScore(r.tagsJSON, terms)
+		results = append(results, &r)
+	}
+	return results, rows.Err()
 }
 
 // buildReason formats the human-readable score breakdown.

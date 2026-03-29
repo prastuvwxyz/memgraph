@@ -1,18 +1,54 @@
 package index
 
 import (
+	"bufio"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/prastuvwxyz/memgraph/internal/parse"
 )
+
+// loadIgnoreFile reads a .memgraphignore-style file and returns its patterns.
+// Lines that are blank or start with # are skipped.
+func loadIgnoreFile(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
 
 // Walk indexes all markdown files under rootDir, skipping exclude patterns.
 // Returns count of files indexed (updated) and total files visited.
 // If verbose=true, prints each updated file path to stderr.
 func Walk(db *DB, rootDir string, exclude []string, verbose bool) (updated, total int, err error) {
+	// Merge .memgraphignore patterns (if present) into exclude list.
+	if extra := loadIgnoreFile(filepath.Join(rootDir, ".memgraphignore")); len(extra) > 0 {
+		seen := make(map[string]bool, len(exclude))
+		for _, e := range exclude {
+			seen[e] = true
+		}
+		for _, e := range extra {
+			if !seen[e] {
+				exclude = append(exclude, e)
+			}
+		}
+	}
+
 	visited := make(map[string]bool)
 
 	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
@@ -96,13 +132,15 @@ func matchesExclude(rel string, exclude []string) bool {
 	components := splitPathComponents(rel)
 
 	for _, pattern := range exclude {
+		// Strip trailing slash from directory patterns (gitignore convention).
+		p := strings.TrimSuffix(pattern, "/")
 		// Match against full relative path.
-		if matched, _ := filepath.Match(pattern, rel); matched {
+		if matched, _ := filepath.Match(p, rel); matched {
 			return true
 		}
 		// Match against each component.
 		for _, component := range components {
-			if matched, _ := filepath.Match(pattern, component); matched {
+			if matched, _ := filepath.Match(p, component); matched {
 				return true
 			}
 		}

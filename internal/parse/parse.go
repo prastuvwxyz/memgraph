@@ -265,14 +265,41 @@ func StripMarkdown(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// reCodeFenceStrip matches fenced code blocks (``` or ~~~), including indented ones.
+var reCodeFenceStrip = regexp.MustCompile("(?ms)^\\s*```.*?^\\s*```\\s*$|(?ms)^\\s*~~~.*?^\\s*~~~\\s*$")
+
+// reInlineCodeStrip matches inline code spans.
+var reInlineCodeStrip = regexp.MustCompile("`[^`\n]+`")
+
+// stripCodeForLinks removes fenced and inline code so link regexes
+// don't match template placeholders inside code blocks.
+func stripCodeForLinks(content string) string {
+	s := reCodeFenceStrip.ReplaceAllString(content, "")
+	return reInlineCodeStrip.ReplaceAllString(s, "")
+}
+
+// looksLikeFilePath returns true if target looks like a relative file path
+// rather than a bare word placeholder (e.g. "url", "ctx", "fake-url").
+// A valid relative link must contain a slash, start with ./ or ../, or carry a file extension.
+func looksLikeFilePath(target string) bool {
+	return strings.Contains(target, "/") ||
+		strings.HasPrefix(target, "./") ||
+		strings.HasPrefix(target, "../") ||
+		strings.Contains(target, ".")
+}
+
 // extractLinks returns all outbound links from markdown content.
-// Includes [[wikilinks]] and [text](relative/path) — skips http/https URLs.
+// Includes [[wikilinks]] and [text](relative/path).
+// Skips http/https URLs, absolute paths (/...), and links inside code blocks.
 func extractLinks(content string) []string {
+	// Strip code blocks/spans first to avoid capturing template placeholders.
+	stripped := stripCodeForLinks(content)
+
 	seen := make(map[string]bool)
 	var links []string
 
 	// Wikilinks: [[target]] or [[target|alias]]
-	for _, m := range reWikilink.FindAllStringSubmatch(content, -1) {
+	for _, m := range reWikilink.FindAllStringSubmatch(stripped, -1) {
 		raw := m[1]
 		// strip alias part after |
 		if idx := strings.Index(raw, "|"); idx != -1 {
@@ -286,15 +313,20 @@ func extractLinks(content string) []string {
 	}
 
 	// Markdown links: [text](path)
-	for _, m := range reMdLink.FindAllStringSubmatch(content, -1) {
+	for _, m := range reMdLink.FindAllStringSubmatch(stripped, -1) {
 		target := strings.TrimSpace(m[1])
-		// Skip absolute URLs
-		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		// Skip absolute URLs and absolute paths
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "/") {
 			continue
 		}
 		// Strip anchor fragment
 		if idx := strings.Index(target, "#"); idx != -1 {
 			target = target[:idx]
+		}
+		// Only keep targets that look like relative file paths:
+		// must contain a slash, start with ./ or ../, or end in a known extension.
+		if !looksLikeFilePath(target) {
+			continue
 		}
 		if target != "" && !seen[target] {
 			seen[target] = true

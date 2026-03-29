@@ -106,8 +106,18 @@ func mergeFile(dst *Config, path string) error {
 	if src.Format != "" {
 		dst.Format = src.Format
 	}
-	if src.Exclude != nil {
-		dst.Exclude = src.Exclude
+	if len(src.Exclude) > 0 {
+		// Append new patterns, skipping duplicates already in dst.
+		existing := make(map[string]bool, len(dst.Exclude))
+		for _, e := range dst.Exclude {
+			existing[e] = true
+		}
+		for _, e := range src.Exclude {
+			if !existing[e] {
+				dst.Exclude = append(dst.Exclude, e)
+				existing[e] = true
+			}
+		}
 	}
 	if src.Contexts != nil {
 		if dst.Contexts == nil {
