@@ -35,23 +35,35 @@ project_openclaw_access.md              0.6530   openclaw              body matc
 
 ## Install
 
+### One-liner (macOS + Linux)
+
+```sh
+curl -sSL https://raw.githubusercontent.com/prastuvwxyz/memgraph/main/install.sh | sh
+```
+
+Detects your OS and arch automatically, installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+
+```sh
+INSTALL_DIR=~/.local/bin curl -sSL https://raw.githubusercontent.com/prastuvwxyz/memgraph/main/install.sh | sh
+```
+
 ### Go install
 
 ```sh
 go install github.com/prastuvwxyz/memgraph@latest
 ```
 
-### Download binary
+### Manual binary download
 
-Pre-built binaries for macOS, Linux, and Windows are available on the [releases page](https://github.com/prastuvwxyz/memgraph/releases).
+Pre-built binaries on the [releases page](https://github.com/prastuvwxyz/memgraph/releases):
 
 ```sh
-# macOS (Apple Silicon + Intel universal)
-curl -L https://github.com/prastuvwxyz/memgraph/releases/latest/download/memgraph_latest_darwin_all.tar.gz | tar xz
+# macOS (universal — works on Apple Silicon + Intel)
+curl -sSL https://github.com/prastuvwxyz/memgraph/releases/latest/download/memgraph_$(curl -s https://api.github.com/repos/prastuvwxyz/memgraph/releases/latest | grep tag_name | cut -d'"' -f4)_darwin_all.tar.gz | tar xz
 sudo mv memgraph /usr/local/bin/
 
 # Linux amd64
-curl -L https://github.com/prastuvwxyz/memgraph/releases/latest/download/memgraph_latest_linux_amd64.tar.gz | tar xz
+curl -sSL https://github.com/prastuvwxyz/memgraph/releases/latest/download/memgraph_$(curl -s https://api.github.com/repos/prastuvwxyz/memgraph/releases/latest | grep tag_name | cut -d'"' -f4)_linux_amd64.tar.gz | tar xz
 sudo mv memgraph /usr/local/bin/
 ```
 
