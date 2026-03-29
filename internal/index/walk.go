@@ -37,24 +37,25 @@ func Walk(db *DB, rootDir string, exclude []string, verbose bool) (updated, tota
 		}
 
 		total++
-		visited[path] = true
+		visited[rel] = true
 
 		f, parseErr := parse.ParseFile(path)
 		if parseErr != nil {
 			// Log and skip unparseable files.
-			fmt.Fprintf(os.Stderr, "parse error %s: %v\n", path, parseErr)
+			fmt.Fprintf(os.Stderr, "parse error %s: %v\n", rel, parseErr)
 			return nil
 		}
+		f.Path = rel // store relative path for portable indexing
 
 		didUpdate, indexErr := db.IndexFile(f)
 		if indexErr != nil {
-			return fmt.Errorf("index %s: %w", path, indexErr)
+			return fmt.Errorf("index %s: %w", rel, indexErr)
 		}
 
 		if didUpdate {
 			updated++
 			if verbose {
-				fmt.Fprintf(os.Stderr, "indexed: %s\n", path)
+				fmt.Fprintf(os.Stderr, "indexed: %s\n", rel)
 			}
 		}
 
