@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
 	"github.com/prastuvwxyz/memgraph/internal/embed"
@@ -69,7 +71,7 @@ func runCluster(cmd *cobra.Command, args []string) error {
 
 	emb := resolveEmbedder(workspace.Config.Embed)
 
-	// Try vector clustering first; fall back to tag clustering.
+	// Try vector clustering first; fall back to TF-IDF content clustering; tag as last resort.
 	if emb != nil {
 		clusters, err := vectorCluster(db.SqlDB(), clusterPrefix, clusterNs, clusterTopics)
 		if err == nil && len(clusters) > 0 {
@@ -78,7 +80,13 @@ func runCluster(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	clusters, err := tagCluster(db.SqlDB(), clusterPrefix, clusterNs, clusterTopics)
+	clusters, err := contentCluster(db.SqlDB(), clusterPrefix, clusterNs, clusterTopics)
+	if err == nil && len(clusters) > 0 {
+		printClusters(clusters, "content")
+		return nil
+	}
+
+	clusters, err = tagCluster(db.SqlDB(), clusterPrefix, clusterNs, clusterTopics)
 	if err != nil {
 		return fmt.Errorf("cluster: %w", err)
 	}
@@ -90,6 +98,187 @@ func runCluster(cmd *cobra.Command, args []string) error {
 type Cluster struct {
 	Label string
 	Files []string
+}
+
+// contentCluster uses TF-IDF on body text to find k discriminating terms as cluster labels.
+// This works even when files have no frontmatter tags.
+func contentCluster(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluster, error) {
+	q := `SELECT path, body FROM notes WHERE 1=1`
+	var args []any
+	if prefix != "" {
+		q += ` AND path LIKE ?`
+		args = append(args, strings.TrimRight(prefix, "/")+"/%")
+	}
+	if len(namespaces) > 0 {
+		ph := strings.Repeat("?,", len(namespaces))
+		ph = ph[:len(ph)-1]
+		q += ` AND namespace IN (` + ph + `)`
+		for _, ns := range namespaces {
+			args = append(args, ns)
+		}
+	}
+	q += ` ORDER BY path`
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type docTerms struct {
+		path string
+		tf   map[string]float64 // term → TF (normalised by doc length)
+	}
+	var docs []docTerms
+	df := map[string]int{} // term → number of docs containing it
+
+	for rows.Next() {
+		var path, body string
+		if err := rows.Scan(&path, &body); err != nil {
+			return nil, err
+		}
+		tokens := tokenize(body)
+		if len(tokens) == 0 {
+			docs = append(docs, docTerms{path, map[string]float64{}})
+			continue
+		}
+		counts := map[string]int{}
+		for _, t := range tokens {
+			counts[t]++
+		}
+		tf := make(map[string]float64, len(counts))
+		for t, c := range counts {
+			tf[t] = float64(c) / float64(len(tokens))
+			df[t]++
+		}
+		docs = append(docs, docTerms{path, tf})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no files found")
+	}
+
+	n := float64(len(docs))
+
+	// Score each term: max TF-IDF across all docs (measures peak discriminability).
+	type termScore struct {
+		term  string
+		score float64
+	}
+	termMax := map[string]float64{}
+	for _, d := range docs {
+		for t, tf := range d.tf {
+			idf := math.Log(n/float64(df[t])) + 1
+			score := tf * idf
+			if score > termMax[t] {
+				termMax[t] = score
+			}
+		}
+	}
+
+	// Filter: only terms that appear in ≥2 docs and ≤40% of docs.
+	maxDF := int(n * 0.4)
+	if maxDF < 2 {
+		maxDF = 2
+	}
+	var ranked []termScore
+	for t, score := range termMax {
+		if df[t] < 2 || df[t] > maxDF {
+			continue
+		}
+		ranked = append(ranked, termScore{t, score})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+	if len(ranked) == 0 {
+		return nil, fmt.Errorf("no discriminating terms found")
+	}
+
+	// Pick top k centroids.
+	centroids := make([]string, 0, k)
+	for _, ts := range ranked {
+		if len(centroids) >= k {
+			break
+		}
+		centroids = append(centroids, ts.term)
+	}
+
+	// Assign each doc to the centroid with highest TF-IDF score.
+	clusterFiles := make(map[string][]string, len(centroids)+1)
+	assigned := map[string]bool{}
+	for _, d := range docs {
+		best, bestScore := "", -1.0
+		for _, c := range centroids {
+			idf := math.Log(n/float64(df[c])) + 1
+			score := d.tf[c] * idf
+			if score > bestScore {
+				bestScore = score
+				best = c
+			}
+		}
+		if bestScore > 0 {
+			clusterFiles[best] = append(clusterFiles[best], d.path)
+			assigned[d.path] = true
+		}
+	}
+	for _, d := range docs {
+		if !assigned[d.path] {
+			clusterFiles["misc"] = append(clusterFiles["misc"], d.path)
+		}
+	}
+
+	var clusters []Cluster
+	for _, c := range centroids {
+		if files := clusterFiles[c]; len(files) > 0 {
+			clusters = append(clusters, Cluster{Label: c, Files: files})
+		}
+	}
+	if misc := clusterFiles["misc"]; len(misc) > 0 {
+		clusters = append(clusters, Cluster{Label: "misc", Files: misc})
+	}
+	return clusters, nil
+}
+
+var stopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "are": true, "but": true,
+	"not": true, "you": true, "all": true, "can": true, "with": true,
+	"this": true, "that": true, "from": true, "they": true, "will": true,
+	"have": true, "been": true, "more": true, "when": true, "what": true,
+	"your": true, "which": true, "their": true, "said": true, "each": true,
+	"she": true, "how": true, "its": true, "our": true, "out": true,
+	"was": true, "has": true, "had": true, "his": true, "her": true,
+	"him": true, "into": true, "also": true, "use": true, "used": true,
+	"one": true, "two": true, "new": true, "some": true, "there": true,
+	"then": true, "than": true, "very": true, "just": true, "only": true,
+	"over": true, "after": true, "before": true, "about": true, "like": true,
+	"does": true, "would": true, "could": true, "should": true, "may": true,
+	"any": true, "same": true, "both": true, "per": true, "via": true,
+}
+
+// tokenize splits text into lowercase alpha tokens, filtering stopwords and short words.
+func tokenize(text string) []string {
+	var tokens []string
+	var buf strings.Builder
+	flush := func() {
+		if buf.Len() >= 4 {
+			w := buf.String()
+			if !stopwords[w] {
+				tokens = append(tokens, w)
+			}
+		}
+		buf.Reset()
+	}
+	for _, r := range strings.ToLower(text) {
+		if unicode.IsLetter(r) {
+			buf.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return tokens
 }
 
 // tagCluster groups files by their most common shared tags.
