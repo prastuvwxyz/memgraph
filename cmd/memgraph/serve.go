@@ -38,11 +38,12 @@ func init() {
 }
 
 type graphNode struct {
-	ID    string   `json:"id"`
-	Title string   `json:"title"`
-	Tags  []string `json:"tags"`
-	Group string   `json:"group"`
-	Links int      `json:"links"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Tags      []string `json:"tags"`
+	Group     string   `json:"group"`
+	Namespace string   `json:"namespace"`
+	Links     int      `json:"links"`
 }
 
 type graphLink struct {
@@ -90,13 +91,32 @@ func runServe(cmd *cobra.Command, args []string) error {
 	})
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
-		data, buildErr := buildGraphData(sqlDB)
+		ns := r.URL.Query().Get("ns")
+		data, buildErr := buildGraphData(sqlDB, ns)
 		if buildErr != nil {
 			http.Error(w, buildErr.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(data)
+	})
+
+	mux.HandleFunc("/api/namespaces", func(w http.ResponseWriter, r *http.Request) {
+		rows, qErr := sqlDB.Query(`SELECT DISTINCT namespace FROM notes ORDER BY namespace`)
+		if qErr != nil {
+			http.Error(w, qErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		var ns []string
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err == nil {
+				ns = append(ns, n)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ns)
 	})
 
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, r *http.Request) {
@@ -127,8 +147,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-func buildGraphData(db *sql.DB) (*graphData, error) {
-	rows, err := db.Query(`SELECT path, title, tags, links_out FROM notes`)
+func buildGraphData(db *sql.DB, nsFilter string) (*graphData, error) {
+	q := `SELECT path, title, tags, links_out, namespace FROM notes`
+	var args []any
+	if nsFilter != "" {
+		q += ` WHERE namespace = ?`
+		args = append(args, nsFilter)
+	}
+	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +165,8 @@ func buildGraphData(db *sql.DB) (*graphData, error) {
 	var allLinks []graphLink
 
 	for rows.Next() {
-		var path, title, tagsJSON, linksJSON string
-		if err := rows.Scan(&path, &title, &tagsJSON, &linksJSON); err != nil {
+		var path, title, tagsJSON, linksJSON, namespace string
+		if err := rows.Scan(&path, &title, &tagsJSON, &linksJSON, &namespace); err != nil {
 			return nil, err
 		}
 
@@ -155,11 +181,12 @@ func buildGraphData(db *sql.DB) (*graphData, error) {
 		}
 
 		nodes = append(nodes, graphNode{
-			ID:    path,
-			Title: title,
-			Tags:  tags,
-			Group: group,
-			Links: len(rawLinks),
+			ID:        path,
+			Title:     title,
+			Tags:      tags,
+			Group:     group,
+			Namespace: namespace,
+			Links:     len(rawLinks),
 		})
 
 		for _, target := range rawLinks {
