@@ -34,11 +34,20 @@ func loadIgnoreFile(path string) []string {
 	return patterns
 }
 
+// FixedNS returns a namespace resolver that always returns the given namespace.
+func FixedNS(ns string) func(string) string {
+	return func(string) string { return ns }
+}
+
 // Walk indexes all markdown files under rootDir, skipping exclude patterns.
-// namespace tags all indexed files for per-agent isolation (empty = global).
+// nsResolver maps each file's root-relative path to its namespace tag; return ""
+// for the global namespace. Use FixedNS("name") for a constant namespace.
 // emb is optional — when non-nil, chunks are also embedded for vector search.
 // Returns count of files indexed (updated) and total files visited.
-func Walk(db *DB, rootDir string, exclude []string, verbose bool, namespace string, emb embed.Embedder) (updated, total int, err error) {
+func Walk(db *DB, rootDir string, exclude []string, verbose bool, nsResolver func(string) string, emb embed.Embedder) (updated, total int, err error) {
+	if nsResolver == nil {
+		nsResolver = func(string) string { return "" }
+	}
 	// Merge .memgraphignore patterns (if present) into exclude list.
 	if extra := loadIgnoreFile(filepath.Join(rootDir, ".memgraphignore")); len(extra) > 0 {
 		seen := make(map[string]bool, len(exclude))
@@ -96,7 +105,7 @@ func Walk(db *DB, rootDir string, exclude []string, verbose bool, namespace stri
 			}
 		}
 
-		didUpdate, indexErr := db.IndexFile(context.Background(), f, namespace, emb)
+		didUpdate, indexErr := db.IndexFile(context.Background(), f, nsResolver(rel), emb)
 		if indexErr != nil {
 			return fmt.Errorf("index %s: %w", rel, indexErr)
 		}

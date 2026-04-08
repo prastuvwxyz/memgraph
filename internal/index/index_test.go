@@ -224,7 +224,7 @@ func TestWalkTempDir(t *testing.T) {
 	}
 	writeMD(t, subDir, "sub-note.md", "# Sub Note\n\nBody.")
 
-	updated, total, err := Walk(db, dir, nil, false, "", nil)
+	updated, total, err := Walk(db, dir, nil, false, FixedNS(""), nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestWalkTempDir(t *testing.T) {
 	}
 
 	// Second walk — no changes, nothing should update.
-	updated2, total2, err := Walk(db, dir, nil, false, "", nil)
+	updated2, total2, err := Walk(db, dir, nil, false, FixedNS(""), nil)
 	if err != nil {
 		t.Fatalf("Walk 2: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestWalkExclude(t *testing.T) {
 	}
 	writeMD(t, excludeDir, "draft.md", "# Draft\n\nDraft content.")
 
-	updated, total, err := Walk(db, dir, []string{"drafts"}, false, "", nil)
+	updated, total, err := Walk(db, dir, []string{"drafts"}, false, FixedNS(""), nil)
 	if err != nil {
 		t.Fatalf("Walk with exclude: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestWalkStaleCleanup(t *testing.T) {
 
 	path := writeMD(t, dir, "temp.md", "# Temp\n\nTemp content.")
 
-	_, _, err := Walk(db, dir, nil, false, "", nil)
+	_, _, err := Walk(db, dir, nil, false, FixedNS(""), nil)
 	if err != nil {
 		t.Fatalf("Walk 1: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestWalkStaleCleanup(t *testing.T) {
 	}
 
 	// Walk again — stale file should be removed from index.
-	_, _, err = Walk(db, dir, nil, false, "", nil)
+	_, _, err = Walk(db, dir, nil, false, FixedNS(""), nil)
 	if err != nil {
 		t.Fatalf("Walk 2: %v", err)
 	}

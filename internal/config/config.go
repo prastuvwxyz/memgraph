@@ -37,11 +37,12 @@ type EmbedConfig struct {
 
 // Config holds memgraph configuration values.
 type Config struct {
-	TopN     int                   `toml:"top_n"`
-	Format   string                `toml:"format"`
-	Exclude  []string              `toml:"exclude"`
-	Contexts map[string]ContextDef `toml:"contexts"`
-	Embed    EmbedConfig           `toml:"embed"`
+	TopN       int                   `toml:"top_n"`
+	Format     string                `toml:"format"`
+	Exclude    []string              `toml:"exclude"`
+	Contexts   map[string]ContextDef `toml:"contexts"`
+	Embed      EmbedConfig           `toml:"embed"`
+	Namespaces map[string][]string   `toml:"namespaces"`
 }
 
 // Workspace is the loaded configuration together with the detected repo root.
@@ -143,6 +144,14 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if src.Embed.BaseURL != "" {
 		dst.Embed.BaseURL = src.Embed.BaseURL
+	}
+	if src.Namespaces != nil {
+		if dst.Namespaces == nil {
+			dst.Namespaces = make(map[string][]string)
+		}
+		for k, v := range src.Namespaces {
+			dst.Namespaces[k] = v
+		}
 	}
 	return nil
 }
