@@ -105,13 +105,13 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
-	// Migrations for existing databases.
-	migrations := []string{
+	// Migrations for existing databases (errors ignored — column already exists).
+	for _, m := range []string{
 		`ALTER TABLE notes ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chunks ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, m := range migrations {
-		db.Exec(m) // ignore error — column already exists
+		`ALTER TABLE notes ADD COLUMN consolidated_at INTEGER DEFAULT NULL`,
+	} {
+		db.Exec(m)
 	}
 
 	return &DB{db: db}, nil
@@ -273,6 +273,36 @@ func (db *DB) DeleteFile(path string) error {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
 	return nil
+}
+
+// MarkConsolidated sets consolidated_at = now for the given paths.
+// Returns count of paths actually updated.
+func (db *DB) MarkConsolidated(paths []string) (int, error) {
+	now := time.Now().Unix()
+	var n int
+	for _, p := range paths {
+		res, err := db.db.Exec(`UPDATE notes SET consolidated_at = ? WHERE path = ?`, now, p)
+		if err != nil {
+			return n, fmt.Errorf("mark %s: %w", p, err)
+		}
+		rows, _ := res.RowsAffected()
+		n += int(rows)
+	}
+	return n, nil
+}
+
+// UnmarkConsolidated clears consolidated_at for the given paths.
+func (db *DB) UnmarkConsolidated(paths []string) (int, error) {
+	var n int
+	for _, p := range paths {
+		res, err := db.db.Exec(`UPDATE notes SET consolidated_at = NULL WHERE path = ?`, p)
+		if err != nil {
+			return n, fmt.Errorf("unmark %s: %w", p, err)
+		}
+		rows, _ := res.RowsAffected()
+		n += int(rows)
+	}
+	return n, nil
 }
 
 // Stats returns count of indexed files and db file size.

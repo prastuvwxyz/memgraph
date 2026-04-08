@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
 	"github.com/prastuvwxyz/memgraph/internal/embed"
@@ -15,11 +16,14 @@ import (
 )
 
 var (
-	queryCtx        string
-	queryTop        int
-	queryFormat     string
-	queryNamespaces []string
-	queryHops       int
+	queryCtx              string
+	queryTop              int
+	queryFormat           string
+	queryNamespaces       []string
+	queryHops             int
+	queryAfter            string
+	queryBefore           string
+	querySkipConsolidated bool
 )
 
 var queryCmd = &cobra.Command{
@@ -35,6 +39,9 @@ func init() {
 	queryCmd.Flags().StringVar(&queryFormat, "format", "table", "output format: table, json, paths")
 	queryCmd.Flags().StringArrayVar(&queryNamespaces, "ns", nil, "filter by namespace(s); repeatable: --ns stella --ns shared")
 	queryCmd.Flags().IntVar(&queryHops, "hops", 0, "BFS graph traversal depth beyond initial results (0 = disabled)")
+	queryCmd.Flags().StringVar(&queryAfter, "after", "", "only files indexed after this date (YYYY-MM-DD)")
+	queryCmd.Flags().StringVar(&queryBefore, "before", "", "only files indexed before this date (YYYY-MM-DD)")
+	queryCmd.Flags().BoolVar(&querySkipConsolidated, "skip-consolidated", false, "exclude files already marked as consolidated")
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
@@ -80,13 +87,28 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
+	var afterTS, beforeTS int64
+	if queryAfter != "" {
+		if t, err := time.Parse("2006-01-02", queryAfter); err == nil {
+			afterTS = t.Unix()
+		}
+	}
+	if queryBefore != "" {
+		if t, err := time.Parse("2006-01-02", queryBefore); err == nil {
+			beforeTS = t.Add(24 * time.Hour).Unix() // inclusive end of day
+		}
+	}
+
 	emb := resolveEmbedder(workspace.Config.Embed)
 	results, err := rank.Search(db.SqlDB(), query, rank.SearchOpts{
-		TopN:       queryTop,
-		Prefix:     ctxPrefix,
-		Namespaces: queryNamespaces,
-		Hops:       queryHops,
-		Embedder:   emb,
+		TopN:             queryTop,
+		Prefix:           ctxPrefix,
+		Namespaces:       queryNamespaces,
+		Hops:             queryHops,
+		After:            afterTS,
+		Before:           beforeTS,
+		SkipConsolidated: querySkipConsolidated,
+		Embedder:         emb,
 	})
 	if err != nil {
 		return fmt.Errorf("search: %w", err)

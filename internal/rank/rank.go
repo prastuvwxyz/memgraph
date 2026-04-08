@@ -25,11 +25,14 @@ const (
 
 // SearchOpts configures a Search call.
 type SearchOpts struct {
-	TopN       int            // max results (0 = default 5)
-	Prefix     string         // if non-empty, restrict to paths with this prefix
-	Namespaces []string       // if non-empty, restrict to these namespaces; empty = all
-	Hops       int            // BFS graph traversal depth (0 = disabled)
-	Embedder   embed.Embedder // optional; enables vector search when non-nil
+	TopN              int            // max results (0 = default 5)
+	Prefix            string         // if non-empty, restrict to paths with this prefix
+	Namespaces        []string       // if non-empty, restrict to these namespaces; empty = all
+	Hops              int            // BFS graph traversal depth (0 = disabled)
+	After             int64          // unix timestamp lower bound on last_indexed (0 = no filter)
+	Before            int64          // unix timestamp upper bound on last_indexed (0 = no filter)
+	SkipConsolidated  bool           // exclude files with consolidated_at IS NOT NULL
+	Embedder          embed.Embedder // optional; enables vector search when non-nil
 }
 
 // Result is a single search result with a blended relevance score.
@@ -90,7 +93,7 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		}
 	} else {
 		// Fallback: file-level FTS search.
-		rows, err := ftsSearch(db, query, opts.Prefix, opts.Namespaces)
+		rows, err := ftsSearch(db, query, opts)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
@@ -220,7 +223,7 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 	ctx := context.Background()
 
 	// BM25 on chunks.
-	bm25ByChunk, err := chunkBM25Search(db, query, opts.Prefix, opts.Namespaces)
+	bm25ByChunk, err := chunkBM25Search(db, query, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -313,20 +316,36 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 }
 
 // chunkBM25Search queries chunks_fts, returning chunk_id → raw BM25 score.
-func chunkBM25Search(db *sql.DB, query, prefix string, namespaces []string) (map[string]float32, error) {
-	baseQ := `
-		SELECT c.id, -rank AS bm25_score
-		FROM chunks_fts
-		JOIN chunks c ON c.rowid = chunks_fts.rowid
-		WHERE chunks_fts MATCH ?`
-	args := []any{query}
-	if prefix != "" {
-		baseQ += ` AND c.path LIKE ?`
-		args = append(args, prefix+"/%")
+func chunkBM25Search(db *sql.DB, query string, opts SearchOpts) (map[string]float32, error) {
+	needsNotes := opts.After > 0 || opts.Before > 0 || opts.SkipConsolidated
+	var baseQ string
+	if needsNotes {
+		baseQ = `
+			SELECT c.id, -rank AS bm25_score
+			FROM chunks_fts
+			JOIN chunks c ON c.rowid = chunks_fts.rowid
+			JOIN notes n ON n.path = c.path
+			WHERE chunks_fts MATCH ?`
+	} else {
+		baseQ = `
+			SELECT c.id, -rank AS bm25_score
+			FROM chunks_fts
+			JOIN chunks c ON c.rowid = chunks_fts.rowid
+			WHERE chunks_fts MATCH ?`
 	}
-	nsSQL, nsArgs := nsClause("c", namespaces)
+	args := []any{query}
+	if opts.Prefix != "" {
+		baseQ += ` AND c.path LIKE ?`
+		args = append(args, opts.Prefix+"/%")
+	}
+	nsSQL, nsArgs := nsClause("c", opts.Namespaces)
 	baseQ += nsSQL
 	args = append(args, nsArgs...)
+	if needsNotes {
+		tSQL, tArgs := temporalClause("n", opts.After, opts.Before, opts.SkipConsolidated)
+		baseQ += tSQL
+		args = append(args, tArgs...)
+	}
 	baseQ += ` ORDER BY rank LIMIT ?`
 	args = append(args, chunkCandidateK)
 
@@ -522,6 +541,29 @@ func pathInNamespaces(db *sql.DB, path string, namespaces []string) bool {
 	return err == nil
 }
 
+// temporalClause builds SQL WHERE fragments for after/before/skip-consolidated filters.
+// table must be the notes table alias (e.g. "n" or "notes").
+func temporalClause(table string, after, before int64, skipConsolidated bool) (string, []any) {
+	var clauses []string
+	var args []any
+	if after > 0 {
+		clauses = append(clauses, table+".last_indexed >= ?")
+		args = append(args, after)
+	}
+	if before > 0 {
+		clauses = append(clauses, table+".last_indexed <= ?")
+		args = append(args, before)
+	}
+	if skipConsolidated {
+		clauses = append(clauses, table+".consolidated_at IS NULL")
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	sql := " AND " + strings.Join(clauses, " AND ")
+	return sql, args
+}
+
 // nsClause builds a SQL WHERE fragment and args slice for namespace filtering.
 // If namespaces is empty, returns no filter (all namespaces).
 // table is the alias/table name that has a .namespace column (e.g. "n", "c").
@@ -556,7 +598,7 @@ func cosineSimilarity(a, b []float32) float32 {
 }
 
 // ftsSearch runs the file-level FTS5 BM25 query (fallback when no chunks indexed).
-func ftsSearch(db *sql.DB, query string, prefix string, namespaces []string) ([]*raw, error) {
+func ftsSearch(db *sql.DB, query string, opts SearchOpts) ([]*raw, error) {
 	base := `
 		SELECT n.id, n.path, n.title, n.tags, n.last_verified,
 		       -bm25(notes_fts) as bm25_score
@@ -565,13 +607,16 @@ func ftsSearch(db *sql.DB, query string, prefix string, namespaces []string) ([]
 		WHERE notes_fts MATCH ?`
 
 	args := []any{query}
-	if prefix != "" {
+	if opts.Prefix != "" {
 		base += ` AND n.path LIKE ?`
-		args = append(args, prefix+"/%")
+		args = append(args, opts.Prefix+"/%")
 	}
-	nsSQL, nsArgs := nsClause("n", namespaces)
+	nsSQL, nsArgs := nsClause("n", opts.Namespaces)
 	base += nsSQL
 	args = append(args, nsArgs...)
+	tSQL, tArgs := temporalClause("n", opts.After, opts.Before, opts.SkipConsolidated)
+	base += tSQL
+	args = append(args, tArgs...)
 	base += ` ORDER BY bm25_score DESC LIMIT 50`
 
 	rows, err := db.Query(base, args...)
