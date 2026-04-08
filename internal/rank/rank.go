@@ -25,9 +25,11 @@ const (
 
 // SearchOpts configures a Search call.
 type SearchOpts struct {
-	TopN    int          // max results (0 = default 5)
-	Prefix  string       // if non-empty, restrict to paths with this prefix
-	Embedder embed.Embedder // optional; enables vector search when non-nil
+	TopN       int            // max results (0 = default 5)
+	Prefix     string         // if non-empty, restrict to paths with this prefix
+	Namespaces []string       // if non-empty, restrict to these namespaces; empty = all
+	Hops       int            // BFS graph traversal depth (0 = disabled)
+	Embedder   embed.Embedder // optional; enables vector search when non-nil
 }
 
 // Result is a single search result with a blended relevance score.
@@ -88,7 +90,7 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		}
 	} else {
 		// Fallback: file-level FTS search.
-		rows, err := ftsSearch(db, query, opts.Prefix)
+		rows, err := ftsSearch(db, query, opts.Prefix, opts.Namespaces)
 		if err != nil {
 			return nil, fmt.Errorf("fts search: %w", err)
 		}
@@ -101,7 +103,7 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 	}
 
 	// Tag-only secondary search (for files whose term only appears in tags).
-	tagRows, err := tagOnlySearch(db, terms, opts.Prefix, byPath)
+	tagRows, err := tagOnlySearch(db, terms, opts.Prefix, opts.Namespaces, byPath)
 	if err == nil {
 		for _, r := range tagRows {
 			byPath[r.path] = r
@@ -154,6 +156,23 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		}
 	}
 
+	// BFS graph traversal: expand opts.Hops hops beyond initial results.
+	if opts.Hops > 0 {
+		bfsExpand(db, byPath, &ordered, opts.Hops, opts.Namespaces)
+		if err := hydrateMetadata(db, byPath); err != nil {
+			return nil, err
+		}
+		// Re-score filename/tags for newly added nodes.
+		for _, r := range ordered {
+			if r.filename == 0 {
+				r.filename = filenameScore(r.path, terms)
+			}
+			if r.tagBonus == 0 {
+				r.tagBonus = tagBonusScore(r.tagsJSON, terms)
+			}
+		}
+	}
+
 	// Blend and build results.
 	results := make([]Result, 0, len(ordered))
 	for _, r := range ordered {
@@ -191,7 +210,7 @@ type pathScores struct {
 
 // searchChunks runs chunk-level BM25 + optional vector search, rolling up to path level.
 // Returns empty map if no chunks are indexed yet.
-func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathScores, error) {
+func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathScores, error) { //nolint:cyclop
 	// Check if chunks table has any rows.
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM chunks LIMIT 1`).Scan(&count); err != nil || count == 0 {
@@ -201,7 +220,7 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 	ctx := context.Background()
 
 	// BM25 on chunks.
-	bm25ByChunk, err := chunkBM25Search(db, query, opts.Prefix)
+	bm25ByChunk, err := chunkBM25Search(db, query, opts.Prefix, opts.Namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +230,7 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 	if opts.Embedder != nil {
 		vecs, err := opts.Embedder.Embed(ctx, []string{query})
 		if err == nil && len(vecs) > 0 {
-			vectorByChunk, _ = chunkVectorSearch(db, vecs[0], opts.Prefix)
+			vectorByChunk, _ = chunkVectorSearch(db, vecs[0], opts.Prefix, opts.Namespaces)
 		}
 	}
 
@@ -294,7 +313,7 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 }
 
 // chunkBM25Search queries chunks_fts, returning chunk_id → raw BM25 score.
-func chunkBM25Search(db *sql.DB, query, prefix string) (map[string]float32, error) {
+func chunkBM25Search(db *sql.DB, query, prefix string, namespaces []string) (map[string]float32, error) {
 	baseQ := `
 		SELECT c.id, -rank AS bm25_score
 		FROM chunks_fts
@@ -305,6 +324,9 @@ func chunkBM25Search(db *sql.DB, query, prefix string) (map[string]float32, erro
 		baseQ += ` AND c.path LIKE ?`
 		args = append(args, prefix+"/%")
 	}
+	nsSQL, nsArgs := nsClause("c", namespaces)
+	baseQ += nsSQL
+	args = append(args, nsArgs...)
 	baseQ += ` ORDER BY rank LIMIT ?`
 	args = append(args, chunkCandidateK)
 
@@ -333,20 +355,27 @@ func chunkBM25Search(db *sql.DB, query, prefix string) (map[string]float32, erro
 }
 
 // chunkVectorSearch computes cosine similarity against all stored embeddings.
-func chunkVectorSearch(db *sql.DB, queryVec []float32, prefix string) (map[string]float32, error) {
-	baseQ := `SELECT cv.chunk_id, cv.embedding FROM chunk_vectors cv`
-	if prefix != "" {
-		baseQ = `
-			SELECT cv.chunk_id, cv.embedding
-			FROM chunk_vectors cv
-			JOIN chunks c ON c.id = cv.chunk_id
-			WHERE c.path LIKE ?`
+func chunkVectorSearch(db *sql.DB, queryVec []float32, prefix string, namespaces []string) (map[string]float32, error) {
+	needsJoin := prefix != "" || len(namespaces) > 0
+	var baseQ string
+	var args []any
+	if needsJoin {
+		baseQ = `SELECT cv.chunk_id, cv.embedding FROM chunk_vectors cv JOIN chunks c ON c.id = cv.chunk_id WHERE 1=1`
+		if prefix != "" {
+			baseQ += ` AND c.path LIKE ?`
+			args = append(args, prefix+"/%")
+		}
+		nsSQL, nsArgs := nsClause("c", namespaces)
+		baseQ += nsSQL
+		args = append(args, nsArgs...)
+	} else {
+		baseQ = `SELECT cv.chunk_id, cv.embedding FROM chunk_vectors cv`
 	}
 
 	var rows *sql.Rows
 	var err error
-	if prefix != "" {
-		rows, err = db.Query(baseQ, prefix+"/%")
+	if len(args) > 0 {
+		rows, err = db.Query(baseQ, args...)
 	} else {
 		rows, err = db.Query(baseQ)
 	}
@@ -434,6 +463,81 @@ func hydrateMetadata(db *sql.DB, byPath map[string]*raw) error {
 	return nil
 }
 
+// bfsExpand performs breadth-first traversal from the initial result set along
+// links_out edges. Newly discovered paths are added to byPath and ordered with
+// a decaying score (parent score × 0.5 per hop). Namespaces filter is applied
+// if non-empty.
+func bfsExpand(db *sql.DB, byPath map[string]*raw, ordered *[]*raw, hops int, namespaces []string) {
+	frontier := make([]string, 0, len(byPath))
+	for p := range byPath {
+		frontier = append(frontier, p)
+	}
+
+	for hop := 0; hop < hops && len(frontier) > 0; hop++ {
+		decay := math.Pow(0.5, float64(hop+1)) // 0.5, 0.25, 0.125 …
+		var nextFrontier []string
+
+		for _, path := range frontier {
+			links, err := fetchLinksOut(db, path)
+			if err != nil || len(links) == 0 {
+				continue
+			}
+			parentScore := byPath[path].bm25 + byPath[path].vectorScore
+
+			for _, link := range links {
+				if byPath[link] != nil {
+					continue // already in result set
+				}
+				// Check namespace constraint.
+				if len(namespaces) > 0 && !pathInNamespaces(db, link, namespaces) {
+					continue
+				}
+				r := &raw{
+					path:        link,
+					bm25:        parentScore * decay,
+					graphBoost:  0.5,
+				}
+				byPath[link] = r
+				*ordered = append(*ordered, r)
+				nextFrontier = append(nextFrontier, link)
+			}
+		}
+		frontier = nextFrontier
+	}
+}
+
+// pathInNamespaces returns true if the note at path belongs to one of the given namespaces.
+func pathInNamespaces(db *sql.DB, path string, namespaces []string) bool {
+	placeholders := strings.Repeat("?,", len(namespaces))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, 0, len(namespaces)+1)
+	args = append(args, path)
+	for _, ns := range namespaces {
+		args = append(args, ns)
+	}
+	var ns string
+	err := db.QueryRow(
+		`SELECT namespace FROM notes WHERE path = ? AND namespace IN (`+placeholders+`)`, args...,
+	).Scan(&ns)
+	return err == nil
+}
+
+// nsClause builds a SQL WHERE fragment and args slice for namespace filtering.
+// If namespaces is empty, returns no filter (all namespaces).
+// table is the alias/table name that has a .namespace column (e.g. "n", "c").
+func nsClause(table string, namespaces []string) (string, []any) {
+	if len(namespaces) == 0 {
+		return "", nil
+	}
+	placeholders := strings.Repeat("?,", len(namespaces))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(namespaces))
+	for i, ns := range namespaces {
+		args[i] = ns
+	}
+	return " AND " + table + ".namespace IN (" + placeholders + ")", args
+}
+
 // cosineSimilarity returns the cosine similarity between two float32 vectors.
 func cosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
@@ -452,7 +556,7 @@ func cosineSimilarity(a, b []float32) float32 {
 }
 
 // ftsSearch runs the file-level FTS5 BM25 query (fallback when no chunks indexed).
-func ftsSearch(db *sql.DB, query string, prefix string) ([]*raw, error) {
+func ftsSearch(db *sql.DB, query string, prefix string, namespaces []string) ([]*raw, error) {
 	base := `
 		SELECT n.id, n.path, n.title, n.tags, n.last_verified,
 		       -bm25(notes_fts) as bm25_score
@@ -465,6 +569,9 @@ func ftsSearch(db *sql.DB, query string, prefix string) ([]*raw, error) {
 		base += ` AND n.path LIKE ?`
 		args = append(args, prefix+"/%")
 	}
+	nsSQL, nsArgs := nsClause("n", namespaces)
+	base += nsSQL
+	args = append(args, nsArgs...)
 	base += ` ORDER BY bm25_score DESC LIMIT 50`
 
 	rows, err := db.Query(base, args...)
@@ -564,7 +671,7 @@ func parseTags(tagsJSON string) []string {
 }
 
 // tagOnlySearch finds files with an exact tag match not returned by FTS5.
-func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string]*raw) ([]*raw, error) {
+func tagOnlySearch(db *sql.DB, terms []string, prefix string, namespaces []string, already map[string]*raw) ([]*raw, error) {
 	if len(terms) == 0 {
 		return nil, nil
 	}
@@ -582,6 +689,9 @@ func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string
 		q += ` AND path LIKE ?`
 		args = append(args, prefix+"/%")
 	}
+	nsSQL, nsArgs := nsClause("notes", namespaces)
+	q += nsSQL
+	args = append(args, nsArgs...)
 
 	rows, err := db.Query(q, args...)
 	if err != nil {

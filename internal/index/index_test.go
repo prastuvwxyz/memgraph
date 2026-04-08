@@ -61,7 +61,7 @@ func TestIndexFile(t *testing.T) {
 	db, _ := tempDB(t)
 
 	f := makeFile("/notes/foo.md", "abc123")
-	updated, err := db.IndexFile(context.Background(), f, nil)
+	updated, err := db.IndexFile(context.Background(), f, "", nil)
 	if err != nil {
 		t.Fatalf("IndexFile: %v", err)
 	}
@@ -82,12 +82,12 @@ func TestSkipUnchangedChecksum(t *testing.T) {
 	db, _ := tempDB(t)
 
 	f := makeFile("/notes/foo.md", "abc123")
-	if _, err := db.IndexFile(context.Background(), f, nil); err != nil {
+	if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 		t.Fatalf("first IndexFile: %v", err)
 	}
 
 	// Same checksum — should skip.
-	updated, err := db.IndexFile(context.Background(), f, nil)
+	updated, err := db.IndexFile(context.Background(), f, "", nil)
 	if err != nil {
 		t.Fatalf("second IndexFile: %v", err)
 	}
@@ -100,14 +100,14 @@ func TestUpdateOnChangedChecksum(t *testing.T) {
 	db, _ := tempDB(t)
 
 	f := makeFile("/notes/foo.md", "abc123")
-	if _, err := db.IndexFile(context.Background(), f, nil); err != nil {
+	if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 		t.Fatalf("first IndexFile: %v", err)
 	}
 
 	// Different checksum — should update.
 	f2 := makeFile("/notes/foo.md", "xyz999")
 	f2.Title = "Updated Title"
-	updated, err := db.IndexFile(context.Background(), f2, nil)
+	updated, err := db.IndexFile(context.Background(), f2, "", nil)
 	if err != nil {
 		t.Fatalf("second IndexFile: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestDeleteFile(t *testing.T) {
 	db, _ := tempDB(t)
 
 	f := makeFile("/notes/foo.md", "abc123")
-	if _, err := db.IndexFile(context.Background(), f, nil); err != nil {
+	if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 		t.Fatalf("IndexFile: %v", err)
 	}
 
@@ -159,7 +159,7 @@ func TestStats(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		f := makeFile(filepath.Join("/notes", filepath.Join("note"+string(rune('a'+i))+".md")), "cs"+string(rune('a'+i)))
-		if _, err := db.IndexFile(context.Background(), f, nil); err != nil {
+		if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 			t.Fatalf("IndexFile %d: %v", i, err)
 		}
 	}
@@ -179,7 +179,7 @@ func TestAllPaths(t *testing.T) {
 	paths := []string{"/a.md", "/b.md", "/c.md"}
 	for i, p := range paths {
 		f := makeFile(p, "cs"+string(rune('a'+i)))
-		if _, err := db.IndexFile(context.Background(), f, nil); err != nil {
+		if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 			t.Fatalf("IndexFile %s: %v", p, err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestWalkTempDir(t *testing.T) {
 	}
 	writeMD(t, subDir, "sub-note.md", "# Sub Note\n\nBody.")
 
-	updated, total, err := Walk(db, dir, nil, false, nil)
+	updated, total, err := Walk(db, dir, nil, false, "", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestWalkTempDir(t *testing.T) {
 	}
 
 	// Second walk — no changes, nothing should update.
-	updated2, total2, err := Walk(db, dir, nil, false, nil)
+	updated2, total2, err := Walk(db, dir, nil, false, "", nil)
 	if err != nil {
 		t.Fatalf("Walk 2: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestWalkExclude(t *testing.T) {
 	}
 	writeMD(t, excludeDir, "draft.md", "# Draft\n\nDraft content.")
 
-	updated, total, err := Walk(db, dir, []string{"drafts"}, false, nil)
+	updated, total, err := Walk(db, dir, []string{"drafts"}, false, "", nil)
 	if err != nil {
 		t.Fatalf("Walk with exclude: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestWalkStaleCleanup(t *testing.T) {
 
 	path := writeMD(t, dir, "temp.md", "# Temp\n\nTemp content.")
 
-	_, _, err := Walk(db, dir, nil, false, nil)
+	_, _, err := Walk(db, dir, nil, false, "", nil)
 	if err != nil {
 		t.Fatalf("Walk 1: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestWalkStaleCleanup(t *testing.T) {
 	}
 
 	// Walk again — stale file should be removed from index.
-	_, _, err = Walk(db, dir, nil, false, nil)
+	_, _, err = Walk(db, dir, nil, false, "", nil)
 	if err != nil {
 		t.Fatalf("Walk 2: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestNilTagsAndLinks(t *testing.T) {
 		Checksum: "xyz",
 	}
 
-	updated, err := db.IndexFile(context.Background(), f, nil)
+	updated, err := db.IndexFile(context.Background(), f, "", nil)
 	if err != nil {
 		t.Fatalf("IndexFile with nil tags/links: %v", err)
 	}

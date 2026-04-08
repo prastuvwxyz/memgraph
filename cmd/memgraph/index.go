@@ -13,6 +13,7 @@ import (
 
 
 var indexVerbose bool
+var indexNamespace string
 
 var indexCmd = &cobra.Command{
 	Use:   "index [dir]",
@@ -23,6 +24,7 @@ var indexCmd = &cobra.Command{
 
 func init() {
 	indexCmd.Flags().BoolVarP(&indexVerbose, "verbose", "v", false, "print each updated file")
+	indexCmd.Flags().StringVar(&indexNamespace, "ns", "", "namespace tag for all indexed files (empty = global)")
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -58,7 +60,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	start := time.Now()
-	updated, total, err := index.Walk(db, abs, workspace.Config.Exclude, indexVerbose, emb)
+	updated, total, err := index.Walk(db, abs, workspace.Config.Exclude, indexVerbose, indexNamespace, emb)
 	if err != nil {
 		return fmt.Errorf("walk: %w", err)
 	}

@@ -24,6 +24,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS notes (
     id            INTEGER PRIMARY KEY,
     path          TEXT UNIQUE NOT NULL,
+    namespace     TEXT NOT NULL DEFAULT '',
     title         TEXT NOT NULL,
     body          TEXT NOT NULL DEFAULT '',
     tags          TEXT NOT NULL DEFAULT '',
@@ -54,6 +55,7 @@ END;
 CREATE TABLE IF NOT EXISTS chunks (
     id          TEXT UNIQUE NOT NULL,
     path        TEXT NOT NULL,
+    namespace   TEXT NOT NULL DEFAULT '',
     chunk_index INTEGER NOT NULL,
     content     TEXT NOT NULL,
     token_count INTEGER NOT NULL
@@ -103,6 +105,15 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	// Migrations for existing databases.
+	migrations := []string{
+		`ALTER TABLE notes ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chunks ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, m := range migrations {
+		db.Exec(m) // ignore error — column already exists
+	}
+
 	return &DB{db: db}, nil
 }
 
@@ -117,9 +128,10 @@ func (db *DB) SqlDB() *sql.DB {
 }
 
 // IndexFile upserts one ParsedFile. Skips if checksum unchanged.
+// namespace tags the file for per-agent isolation (empty = global).
 // emb is optional — when non-nil, chunks are also embedded for vector search.
 // Returns true if the file was actually re-indexed.
-func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, emb embed.Embedder) (updated bool, err error) {
+func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, namespace string, emb embed.Embedder) (updated bool, err error) {
 	// Check existing checksum.
 	var existingChecksum string
 	err = db.db.QueryRow(`SELECT checksum FROM notes WHERE path = ?`, f.Path).Scan(&existingChecksum)
@@ -144,9 +156,10 @@ func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, emb embed.Embe
 	now := time.Now().Unix()
 
 	_, err = db.db.Exec(`
-		INSERT INTO notes (path, title, body, tags, links_out, checksum, last_verified, last_indexed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO notes (path, namespace, title, body, tags, links_out, checksum, last_verified, last_indexed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
+			namespace     = excluded.namespace,
 			title         = excluded.title,
 			body          = excluded.body,
 			tags          = excluded.tags,
@@ -155,15 +168,14 @@ func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, emb embed.Embe
 			last_verified = excluded.last_verified,
 			last_indexed  = excluded.last_indexed
 	`,
-		f.Path, f.Title, f.Body, string(tagsJSON), string(linksJSON),
+		f.Path, namespace, f.Title, f.Body, string(tagsJSON), string(linksJSON),
 		f.Checksum, f.LastVerified, now,
 	)
 	if err != nil {
 		return false, fmt.Errorf("upsert note: %w", err)
 	}
 
-	if err := db.indexChunks(ctx, f.Path, f.FullBody, emb); err != nil {
-		// Non-fatal: log and continue — BM25 file-level search still works.
+	if err := db.indexChunks(ctx, f.Path, namespace, f.FullBody, emb); err != nil {
 		fmt.Fprintf(os.Stderr, "chunk %s: %v\n", f.Path, err)
 	}
 
@@ -172,7 +184,7 @@ func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, emb embed.Embe
 
 // indexChunks deletes old chunks for path and inserts fresh ones.
 // If emb is non-nil, also stores vector embeddings.
-func (db *DB) indexChunks(ctx context.Context, path, fullBody string, emb embed.Embedder) error {
+func (db *DB) indexChunks(ctx context.Context, path, namespace, fullBody string, emb embed.Embedder) error {
 	// Delete stale chunks (triggers handle FTS cleanup).
 	if _, err := db.db.ExecContext(ctx, `DELETE FROM chunks WHERE path = ?`, path); err != nil {
 		return fmt.Errorf("delete old chunks: %w", err)
@@ -193,8 +205,8 @@ func (db *DB) indexChunks(ctx context.Context, path, fullBody string, emb embed.
 		id := uuid.New().String()
 		ids[i] = id
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO chunks (id, path, chunk_index, content, token_count) VALUES (?, ?, ?, ?, ?)`,
-			id, path, c.ChunkIndex, c.Content, c.TokenCount); err != nil {
+			`INSERT INTO chunks (id, path, namespace, chunk_index, content, token_count) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, path, namespace, c.ChunkIndex, c.Content, c.TokenCount); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("insert chunk: %w", err)
 		}

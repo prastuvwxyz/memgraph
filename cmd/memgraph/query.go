@@ -15,9 +15,11 @@ import (
 )
 
 var (
-	queryCtx    string
-	queryTop    int
-	queryFormat string
+	queryCtx        string
+	queryTop        int
+	queryFormat     string
+	queryNamespaces []string
+	queryHops       int
 )
 
 var queryCmd = &cobra.Command{
@@ -31,6 +33,8 @@ func init() {
 	queryCmd.Flags().StringVar(&queryCtx, "ctx", "", "named context to search within")
 	queryCmd.Flags().IntVar(&queryTop, "top", 5, "number of results to return")
 	queryCmd.Flags().StringVar(&queryFormat, "format", "table", "output format: table, json, paths")
+	queryCmd.Flags().StringArrayVar(&queryNamespaces, "ns", nil, "filter by namespace(s); repeatable: --ns stella --ns shared")
+	queryCmd.Flags().IntVar(&queryHops, "hops", 0, "BFS graph traversal depth beyond initial results (0 = disabled)")
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
@@ -78,9 +82,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 
 	emb := resolveEmbedder(workspace.Config.Embed)
 	results, err := rank.Search(db.SqlDB(), query, rank.SearchOpts{
-		TopN:     queryTop,
-		Prefix:   ctxPrefix,
-		Embedder: emb,
+		TopN:       queryTop,
+		Prefix:     ctxPrefix,
+		Namespaces: queryNamespaces,
+		Hops:       queryHops,
+		Embedder:   emb,
 	})
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
