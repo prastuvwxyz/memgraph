@@ -63,18 +63,30 @@ func runSimilar(cmd *cobra.Command, args []string) error {
 	defer db.Close()
 
 	emb := resolveEmbedder(workspace.Config.Embed)
-	results, err := rank.Search(db.SqlDB(), text, rank.SearchOpts{
-		TopN:       similarTop * 3, // fetch more, then filter by threshold
+	opts := rank.SearchOpts{
+		TopN:       similarTop * 3,
 		Prefix:     similarAgainst,
 		Namespaces: similarNs,
 		Embedder:   emb,
-	})
+	}
+	results, err := rank.Search(db.SqlDB(), text, opts)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
 
+	// If no results with full text, retry with the longest word (most distinctive token).
 	if len(results) == 0 {
-		fmt.Println("No similar content found.")
+		best := longestToken(text)
+		if best != "" && best != text {
+			results, err = rank.Search(db.SqlDB(), best, opts)
+			if err != nil {
+				return fmt.Errorf("search: %w", err)
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No similar content found. Try a shorter or more specific query.")
 		return nil
 	}
 
@@ -112,6 +124,17 @@ func runSimilar(cmd *cobra.Command, args []string) error {
 		fmt.Printf("No results above threshold %.2f\n", similarThreshold)
 	}
 	return nil
+}
+
+// longestToken returns the longest whitespace-separated word in text.
+func longestToken(text string) string {
+	best := ""
+	for _, w := range strings.Fields(text) {
+		if len(w) > len(best) {
+			best = w
+		}
+	}
+	return best
 }
 
 func confidenceLabel(norm float64) string {

@@ -142,14 +142,24 @@ func tagCluster(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluste
 		return nil, fmt.Errorf("no files found")
 	}
 
-	// Sort tags by frequency descending; pick top k.
+	// Sort tags by frequency descending; pick top k representative tags.
+	// Skip tags that are too ubiquitous (> 40% of files) — they make poor cluster labels.
+	// Skip tags that appear in only 1 file — too specific to be a cluster.
 	type tf struct {
 		tag   string
 		count int
 	}
 	var ranked []tf
+	maxFilesFrac := int(float64(len(allFiles)) * 0.4)
+	if maxFilesFrac < 2 {
+		maxFilesFrac = 2
+	}
 	for t, files := range tagFiles {
-		ranked = append(ranked, tf{t, len(files)})
+		n := len(files)
+		if n <= 1 || n > maxFilesFrac {
+			continue
+		}
+		ranked = append(ranked, tf{t, n})
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].count > ranked[j].count })
 
@@ -160,6 +170,19 @@ func tagCluster(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluste
 			break
 		}
 		clusterTags = append(clusterTags, r.tag)
+	}
+	// Fallback: if filtering left us with nothing, use the k most frequent tags.
+	if len(clusterTags) == 0 {
+		for t, files := range tagFiles {
+			ranked = append(ranked, tf{t, len(files)})
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].count > ranked[j].count })
+		for _, r := range ranked {
+			if len(clusterTags) >= k {
+				break
+			}
+			clusterTags = append(clusterTags, r.tag)
+		}
 	}
 
 	// Assign each file to its best matching cluster (first tag match wins).
