@@ -336,7 +336,7 @@ func chunkBM25Search(db *sql.DB, query string, opts SearchOpts) (map[string]floa
 	args := []any{query}
 	if opts.Prefix != "" {
 		baseQ += ` AND c.path LIKE ?`
-		args = append(args, opts.Prefix+"/%")
+		args = append(args, strings.TrimRight(opts.Prefix, "/")+"/%")
 	}
 	nsSQL, nsArgs := nsClause("c", opts.Namespaces)
 	baseQ += nsSQL
@@ -609,7 +609,7 @@ func ftsSearch(db *sql.DB, query string, opts SearchOpts) ([]*raw, error) {
 	args := []any{query}
 	if opts.Prefix != "" {
 		base += ` AND n.path LIKE ?`
-		args = append(args, opts.Prefix+"/%")
+		args = append(args, strings.TrimRight(opts.Prefix, "/")+"/%")
 	}
 	nsSQL, nsArgs := nsClause("n", opts.Namespaces)
 	base += nsSQL
