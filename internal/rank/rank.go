@@ -2,20 +2,32 @@
 package rank
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/prastuvwxyz/memgraph/internal/embed"
 )
 
 const defaultTopN = 5
 
+const (
+	vectorWeight    = 0.6
+	bm25Weight      = 0.4
+	scoreThreshold  = 0.1 // minimum combined score to include a chunk result
+	chunkCandidateK = 20  // chunk candidates per search method
+)
+
 // SearchOpts configures a Search call.
 type SearchOpts struct {
-	TopN   int    // max results (0 = default 5)
-	Prefix string // if non-empty, restrict to paths with this prefix (e.g. "contexts/work")
+	TopN    int          // max results (0 = default 5)
+	Prefix  string       // if non-empty, restrict to paths with this prefix
+	Embedder embed.Embedder // optional; enables vector search when non-nil
 }
 
 // Result is a single search result with a blended relevance score.
@@ -38,9 +50,12 @@ type raw struct {
 	filename     float64
 	tagBonus     float64
 	graphBoost   float64
+	vectorScore  float64 // max vector score across chunks for this path
 }
 
 // Search queries the index and returns ranked results.
+// When opts.Embedder is non-nil and chunk vectors exist, uses hybrid BM25+vector search.
+// Falls back to BM25-only otherwise.
 func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 	topN := opts.TopN
 	if topN <= 0 {
@@ -52,26 +67,40 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		return nil, nil
 	}
 
-	// 1. Tokenize.
 	terms := tokenize(query)
 
-	// 2. FTS5 BM25 search.
-	rows, err := ftsSearch(db, query, opts.Prefix)
+	// Try hybrid chunk-based search first.
+	chunkResults, err := searchChunks(db, query, opts)
 	if err != nil {
-		return nil, fmt.Errorf("fts search: %w", err)
+		return nil, err
 	}
 
-	// Index by path for dedup and graph boost lookup.
+	// If we got chunk-level results, build file-level scores from them.
+	// Otherwise fall back to notes_fts (file-level BM25).
 	byPath := make(map[string]*raw)
-	ordered := make([]*raw, 0)
-	for _, r := range rows {
-		if _, exists := byPath[r.path]; !exists {
-			byPath[r.path] = r
+	var ordered []*raw
+
+	if len(chunkResults) > 0 {
+		for path, scores := range chunkResults {
+			r := &raw{path: path, bm25: scores.bm25, vectorScore: float64(scores.vector)}
+			byPath[path] = r
 			ordered = append(ordered, r)
+		}
+	} else {
+		// Fallback: file-level FTS search.
+		rows, err := ftsSearch(db, query, opts.Prefix)
+		if err != nil {
+			return nil, fmt.Errorf("fts search: %w", err)
+		}
+		for _, r := range rows {
+			if _, exists := byPath[r.path]; !exists {
+				byPath[r.path] = r
+				ordered = append(ordered, r)
+			}
 		}
 	}
 
-	// Secondary: find files that have an exact tag match but weren't in FTS5.
+	// Tag-only secondary search (for files whose term only appears in tags).
 	tagRows, err := tagOnlySearch(db, terms, opts.Prefix, byPath)
 	if err == nil {
 		for _, r := range tagRows {
@@ -84,32 +113,35 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		return nil, nil
 	}
 
-	// 3. Filename score.
+	// Hydrate title/tags/lastVerified for chunk-result paths (not fetched during chunk search).
+	if err := hydrateMetadata(db, byPath); err != nil {
+		return nil, err
+	}
+
+	// Filename score.
 	for _, r := range ordered {
 		r.filename = filenameScore(r.path, terms)
 	}
 
-	// 4. Tag bonus.
+	// Tag bonus.
 	for _, r := range ordered {
 		r.tagBonus = tagBonusScore(r.tagsJSON, terms)
 	}
 
-	// 5. Graph boost: top-3 by (bm25 + filename).
+	// Graph boost: top-3 by pre-blend score.
 	type scored struct {
-		r     *raw
-		pre   float64
+		r   *raw
+		pre float64
 	}
 	pre := make([]scored, len(ordered))
 	for i, r := range ordered {
-		pre[i] = scored{r, r.bm25 + r.filename}
+		pre[i] = scored{r, r.bm25 + r.filename + r.vectorScore}
 	}
 	sort.Slice(pre, func(i, j int) bool { return pre[i].pre > pre[j].pre })
-
 	top3 := pre
 	if len(top3) > 3 {
 		top3 = top3[:3]
 	}
-
 	for _, s := range top3 {
 		links, err := fetchLinksOut(db, s.r.path)
 		if err != nil {
@@ -122,34 +154,304 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		}
 	}
 
-	// 6. Blend and build results.
+	// Blend and build results.
 	results := make([]Result, 0, len(ordered))
 	for _, r := range ordered {
-		final := 0.4*r.filename + 0.5*r.bm25 + 0.1*r.graphBoost + r.tagBonus
+		var final float64
+		if r.vectorScore > 0 {
+			// Hybrid: vector contributes alongside BM25 and filename.
+			final = vectorWeight*r.vectorScore + bm25Weight*(0.4*r.filename+0.5*r.bm25+0.1*r.graphBoost+r.tagBonus)
+		} else {
+			final = 0.4*r.filename + 0.5*r.bm25 + 0.1*r.graphBoost + r.tagBonus
+		}
 
 		tags := parseTags(r.tagsJSON)
-		reason := buildReason(r, final)
-
 		results = append(results, Result{
 			Path:         r.path,
 			Title:        r.title,
 			Score:        final,
 			Tags:         tags,
 			LastVerified: r.lastVerified,
-			Reason:       reason,
+			Reason:       buildReason(r, final),
 		})
 	}
 
-	// 7. Sort descending, return topN.
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-
 	if len(results) > topN {
 		results = results[:topN]
 	}
 	return results, nil
 }
 
-// ftsSearch runs the FTS5 BM25 query with optional path prefix filter.
+// pathScores holds the best BM25 and vector score for a path (rolled up from chunks).
+type pathScores struct {
+	bm25   float64
+	vector float32
+}
+
+// searchChunks runs chunk-level BM25 + optional vector search, rolling up to path level.
+// Returns empty map if no chunks are indexed yet.
+func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathScores, error) {
+	// Check if chunks table has any rows.
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM chunks LIMIT 1`).Scan(&count); err != nil || count == 0 {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+
+	// BM25 on chunks.
+	bm25ByChunk, err := chunkBM25Search(db, query, opts.Prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	// Vector search on chunks (optional).
+	vectorByChunk := map[string]float32{}
+	if opts.Embedder != nil {
+		vecs, err := opts.Embedder.Embed(ctx, []string{query})
+		if err == nil && len(vecs) > 0 {
+			vectorByChunk, _ = chunkVectorSearch(db, vecs[0], opts.Prefix)
+		}
+	}
+
+	if len(bm25ByChunk) == 0 && len(vectorByChunk) == 0 {
+		return nil, nil
+	}
+
+	// Normalize BM25 scores to [0,1].
+	maxBM25 := float32(0)
+	for _, s := range bm25ByChunk {
+		if s > maxBM25 {
+			maxBM25 = s
+		}
+	}
+
+	// Collect all candidate chunk IDs.
+	seen := map[string]bool{}
+	var candidates []string
+	for id := range vectorByChunk {
+		if !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, id)
+		}
+	}
+	for id := range bm25ByChunk {
+		if !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, id)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Fetch paths for all candidates.
+	chunkPaths, err := fetchChunkPaths(db, candidates)
+	if err != nil {
+		return nil, err
+	}
+
+	// Roll up to file level: take max score per path.
+	result := map[string]*pathScores{}
+	for _, id := range candidates {
+		path, ok := chunkPaths[id]
+		if !ok {
+			continue
+		}
+		vs := vectorByChunk[id]
+		bs := bm25ByChunk[id]
+		if maxBM25 > 0 {
+			bs = bs / maxBM25
+		}
+
+		var combined float32
+		if opts.Embedder != nil {
+			combined = float32(vectorWeight)*vs + float32(bm25Weight)*bs
+		} else {
+			combined = bs
+		}
+		if combined < scoreThreshold {
+			continue
+		}
+
+		if existing, ok := result[path]; ok {
+			if combined > float32(existing.bm25) || vs > existing.vector {
+				if bs > float32(existing.bm25) {
+					existing.bm25 = float64(bs)
+				}
+				if vs > existing.vector {
+					existing.vector = vs
+				}
+			}
+		} else {
+			result[path] = &pathScores{bm25: float64(bs), vector: vs}
+		}
+	}
+
+	return result, nil
+}
+
+// chunkBM25Search queries chunks_fts, returning chunk_id → raw BM25 score.
+func chunkBM25Search(db *sql.DB, query, prefix string) (map[string]float32, error) {
+	baseQ := `
+		SELECT c.id, -rank AS bm25_score
+		FROM chunks_fts
+		JOIN chunks c ON c.rowid = chunks_fts.rowid
+		WHERE chunks_fts MATCH ?`
+	args := []any{query}
+	if prefix != "" {
+		baseQ += ` AND c.path LIKE ?`
+		args = append(args, prefix+"/%")
+	}
+	baseQ += ` ORDER BY rank LIMIT ?`
+	args = append(args, chunkCandidateK)
+
+	rows, err := db.Query(baseQ, args...)
+	if err != nil {
+		// Retry with escaped query on FTS syntax error.
+		escaped := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+		args[0] = escaped
+		rows, err = db.Query(baseQ, args...)
+		if err != nil {
+			return nil, nil // non-fatal: fall back to vector-only
+		}
+	}
+	defer rows.Close()
+
+	scores := map[string]float32{}
+	for rows.Next() {
+		var id string
+		var score float32
+		if err := rows.Scan(&id, &score); err != nil {
+			return nil, err
+		}
+		scores[id] = score
+	}
+	return scores, rows.Err()
+}
+
+// chunkVectorSearch computes cosine similarity against all stored embeddings.
+func chunkVectorSearch(db *sql.DB, queryVec []float32, prefix string) (map[string]float32, error) {
+	baseQ := `SELECT cv.chunk_id, cv.embedding FROM chunk_vectors cv`
+	if prefix != "" {
+		baseQ = `
+			SELECT cv.chunk_id, cv.embedding
+			FROM chunk_vectors cv
+			JOIN chunks c ON c.id = cv.chunk_id
+			WHERE c.path LIKE ?`
+	}
+
+	var rows *sql.Rows
+	var err error
+	if prefix != "" {
+		rows, err = db.Query(baseQ, prefix+"/%")
+	} else {
+		rows, err = db.Query(baseQ)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		id    string
+		score float32
+	}
+	var all []candidate
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		vec, err := embed.DecodeEmbedding(blob)
+		if err != nil {
+			continue
+		}
+		sim := cosineSimilarity(queryVec, vec)
+		all = append(all, candidate{id, sim})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
+	if len(all) > chunkCandidateK {
+		all = all[:chunkCandidateK]
+	}
+
+	scores := make(map[string]float32, len(all))
+	for _, c := range all {
+		scores[c.id] = c.score
+	}
+	return scores, nil
+}
+
+// fetchChunkPaths returns path for each chunk id.
+func fetchChunkPaths(db *sql.DB, ids []string) (map[string]string, error) {
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := db.Query(`SELECT id, path FROM chunks WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		result[id] = path
+	}
+	return result, rows.Err()
+}
+
+// hydrateMetadata fills title/tags/lastVerified for paths that only have scores so far.
+func hydrateMetadata(db *sql.DB, byPath map[string]*raw) error {
+	for path, r := range byPath {
+		if r.title != "" {
+			continue
+		}
+		var title, tagsJSON, lastVerified string
+		err := db.QueryRow(
+			`SELECT title, tags, last_verified FROM notes WHERE path = ?`, path,
+		).Scan(&title, &tagsJSON, &lastVerified)
+		if err != nil {
+			continue // file might not be in notes yet; skip gracefully
+		}
+		r.title = title
+		r.tagsJSON = tagsJSON
+		r.lastVerified = lastVerified
+	}
+	return nil
+}
+
+// cosineSimilarity returns the cosine similarity between two float32 vectors.
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return float32(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
+}
+
+// ftsSearch runs the file-level FTS5 BM25 query (fallback when no chunks indexed).
 func ftsSearch(db *sql.DB, query string, prefix string) ([]*raw, error) {
 	base := `
 		SELECT n.id, n.path, n.title, n.tags, n.last_verified,
@@ -167,7 +469,6 @@ func ftsSearch(db *sql.DB, query string, prefix string) ([]*raw, error) {
 
 	rows, err := db.Query(base, args...)
 	if err != nil {
-		// Retry with escaped query.
 		escaped := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 		args[0] = escaped
 		rows, err = db.Query(base, args...)
@@ -219,7 +520,6 @@ func tokenize(q string) []string {
 // filenameScore returns matches*3.0 for terms found in the path components.
 func filenameScore(path string, terms []string) float64 {
 	lower := strings.ToLower(path)
-	// Check filename and all directory components.
 	base := strings.ToLower(filepath.Base(path))
 	dir := strings.ToLower(filepath.Dir(path))
 
@@ -251,7 +551,7 @@ func tagBonusScore(tagsJSON string, terms []string) float64 {
 	return bonus
 }
 
-// parseTags unmarshals a JSON tags array, returning nil on error.
+// parseTags unmarshals a JSON tags array.
 func parseTags(tagsJSON string) []string {
 	if tagsJSON == "" || tagsJSON == "null" {
 		return nil
@@ -263,15 +563,12 @@ func parseTags(tagsJSON string) []string {
 	return tags
 }
 
-// tagOnlySearch finds files that have an exact tag match for any search term
-// but were not returned by FTS5 (i.e. the term only appears in tags, not body/title).
-// Returns raw entries with tagBonus pre-set and bm25=0.
+// tagOnlySearch finds files with an exact tag match not returned by FTS5.
 func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string]*raw) ([]*raw, error) {
 	if len(terms) == 0 {
 		return nil, nil
 	}
 
-	// Build WHERE: tags LIKE '%"term"%' for each term, OR-combined.
 	clauses := make([]string, 0, len(terms))
 	args := make([]any, 0, len(terms)+1)
 	for _, t := range terms {
@@ -281,7 +578,6 @@ func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string
 
 	q := `SELECT path, title, tags, last_verified FROM notes WHERE (` +
 		strings.Join(clauses, " OR ") + `)`
-
 	if prefix != "" {
 		q += ` AND path LIKE ?`
 		args = append(args, prefix+"/%")
@@ -300,7 +596,7 @@ func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string
 			return nil, err
 		}
 		if already[r.path] != nil {
-			continue // already scored by FTS5
+			continue
 		}
 		r.tagBonus = tagBonusScore(r.tagsJSON, terms)
 		results = append(results, &r)
@@ -310,7 +606,10 @@ func tagOnlySearch(db *sql.DB, terms []string, prefix string, already map[string
 
 // buildReason formats the human-readable score breakdown.
 func buildReason(r *raw, final float64) string {
-	parts := []string{}
+	var parts []string
+	if r.vectorScore > 0 {
+		parts = append(parts, fmt.Sprintf("vec:%.2f", r.vectorScore))
+	}
 	if r.filename > 0 {
 		parts = append(parts, fmt.Sprintf("filename:%.0f", r.filename))
 	}

@@ -15,7 +15,8 @@ type ParsedFile struct {
 	Path         string   // relative path from root
 	Title        string   // H1 heading or filename without ext
 	Tags         []string // from YAML frontmatter "tags:" field
-	Body         string   // markdown body stripped to plain text (max 2000 chars)
+	Body         string   // markdown body stripped to plain text (max 2000 chars, for FTS)
+	FullBody     string   // full stripped body without truncation (for chunking)
 	Links        []string // outbound links: [[wikilinks]] + [text](path) targets
 	Checksum     string   // sha256 hex of raw file content
 	LastVerified string   // from <!-- last-verified: YYYY-MM-DD --> comment
@@ -48,7 +49,8 @@ func ParseFile(path string) (*ParsedFile, error) {
 
 	lastVerified := extractLastVerified(content)
 
-	body := StripMarkdown(bodyContent)
+	fullBody := StripMarkdown(bodyContent)
+	body := fullBody
 	if len(body) > 2000 {
 		body = body[:2000]
 	}
@@ -60,6 +62,7 @@ func ParseFile(path string) (*ParsedFile, error) {
 		Title:        title,
 		Tags:         tags,
 		Body:         body,
+		FullBody:     fullBody,
 		Links:        links,
 		Checksum:     checksum,
 		LastVerified: lastVerified,

@@ -25,4 +25,11 @@ exclude = [
 #
 # [contexts.personal]
 # root = "."
+
+# Optional: vector embeddings for hybrid BM25+vector search.
+# Set api_key here or via MEMGRAPH_EMBED_KEY env var.
+# [embed]
+# provider = "openai"   # "openai" (default) or "google"
+# api_key  = ""
+# base_url = ""         # optional custom endpoint
 `

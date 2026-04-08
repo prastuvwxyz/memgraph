@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
 var indexVerbose bool
 
 var indexCmd = &cobra.Command{
@@ -51,8 +52,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
+	emb := resolveEmbedder(workspace.Config.Embed)
+	if emb != nil {
+		fmt.Fprintf(os.Stderr, "Embedding enabled: %s\n", emb.ModelName())
+	}
+
 	start := time.Now()
-	updated, total, err := index.Walk(db, abs, workspace.Config.Exclude, indexVerbose)
+	updated, total, err := index.Walk(db, abs, workspace.Config.Exclude, indexVerbose, emb)
 	if err != nil {
 		return fmt.Errorf("walk: %w", err)
 	}

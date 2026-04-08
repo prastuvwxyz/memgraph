@@ -1,13 +1,17 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/prastuvwxyz/memgraph/internal/chunk"
+	"github.com/prastuvwxyz/memgraph/internal/embed"
 	"github.com/prastuvwxyz/memgraph/internal/parse"
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -46,6 +50,39 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
     INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES('delete', old.id, old.title, old.body);
     INSERT INTO notes_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
 END;
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id          TEXT UNIQUE NOT NULL,
+    path        TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content     TEXT NOT NULL,
+    token_count INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content,
+    content=chunks, content_rowid=rowid
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TABLE IF NOT EXISTS chunk_vectors (
+    chunk_id  TEXT PRIMARY KEY,
+    embedding BLOB NOT NULL
+);
 `
 
 // Open opens (or creates) the index at dbPath.
@@ -80,8 +117,9 @@ func (db *DB) SqlDB() *sql.DB {
 }
 
 // IndexFile upserts one ParsedFile. Skips if checksum unchanged.
+// emb is optional — when non-nil, chunks are also embedded for vector search.
 // Returns true if the file was actually re-indexed.
-func (db *DB) IndexFile(f *parse.ParsedFile) (updated bool, err error) {
+func (db *DB) IndexFile(ctx context.Context, f *parse.ParsedFile, emb embed.Embedder) (updated bool, err error) {
 	// Check existing checksum.
 	var existingChecksum string
 	err = db.db.QueryRow(`SELECT checksum FROM notes WHERE path = ?`, f.Path).Scan(&existingChecksum)
@@ -90,7 +128,6 @@ func (db *DB) IndexFile(f *parse.ParsedFile) (updated bool, err error) {
 	}
 
 	if err == nil && existingChecksum == f.Checksum {
-		// Checksum unchanged, skip.
 		return false, nil
 	}
 
@@ -118,27 +155,110 @@ func (db *DB) IndexFile(f *parse.ParsedFile) (updated bool, err error) {
 			last_verified = excluded.last_verified,
 			last_indexed  = excluded.last_indexed
 	`,
-		f.Path,
-		f.Title,
-		f.Body,
-		string(tagsJSON),
-		string(linksJSON),
-		f.Checksum,
-		f.LastVerified,
-		now,
+		f.Path, f.Title, f.Body, string(tagsJSON), string(linksJSON),
+		f.Checksum, f.LastVerified, now,
 	)
 	if err != nil {
 		return false, fmt.Errorf("upsert note: %w", err)
 	}
 
+	if err := db.indexChunks(ctx, f.Path, f.FullBody, emb); err != nil {
+		// Non-fatal: log and continue — BM25 file-level search still works.
+		fmt.Fprintf(os.Stderr, "chunk %s: %v\n", f.Path, err)
+	}
+
 	return true, nil
 }
 
-// DeleteFile removes a file from the index by path.
-func (db *DB) DeleteFile(path string) error {
-	_, err := db.db.Exec(`DELETE FROM notes WHERE path = ?`, path)
+// indexChunks deletes old chunks for path and inserts fresh ones.
+// If emb is non-nil, also stores vector embeddings.
+func (db *DB) indexChunks(ctx context.Context, path, fullBody string, emb embed.Embedder) error {
+	// Delete stale chunks (triggers handle FTS cleanup).
+	if _, err := db.db.ExecContext(ctx, `DELETE FROM chunks WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("delete old chunks: %w", err)
+	}
+
+	chunks := chunk.Split(fullBody, path)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	// Insert chunks in a transaction.
+	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	ids := make([]string, len(chunks))
+	for i, c := range chunks {
+		id := uuid.New().String()
+		ids[i] = id
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO chunks (id, path, chunk_index, content, token_count) VALUES (?, ?, ?, ?, ?)`,
+			id, path, c.ChunkIndex, c.Content, c.TokenCount); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert chunk: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if emb == nil {
+		return nil
+	}
+
+	// Embed in batches of 100.
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.Content
+	}
+	const batchSize = 100
+	for start := 0; start < len(texts); start += batchSize {
+		end := start + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		vecs, err := emb.Embed(ctx, texts[start:end])
+		if err != nil {
+			return fmt.Errorf("embed batch: %w", err)
+		}
+		for j, vec := range vecs {
+			blob, err := embed.EncodeEmbedding(vec)
+			if err != nil {
+				continue
+			}
+			if _, err := db.db.ExecContext(ctx,
+				`INSERT OR REPLACE INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)`,
+				ids[start+j], blob); err != nil {
+				fmt.Fprintf(os.Stderr, "store vector %s: %v\n", ids[start+j], err)
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteFile removes a file and its chunks from the index.
+func (db *DB) DeleteFile(path string) error {
+	if _, err := db.db.Exec(`DELETE FROM notes WHERE path = ?`, path); err != nil {
 		return fmt.Errorf("delete note: %w", err)
+	}
+	// Delete chunks; triggers handle FTS cleanup; chunk_vectors cascade via app logic.
+	rows, err := db.db.Query(`SELECT id FROM chunks WHERE path = ?`, path)
+	if err == nil {
+		var ids []string
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		for _, id := range ids {
+			db.db.Exec(`DELETE FROM chunk_vectors WHERE chunk_id = ?`, id)
+		}
+	}
+	if _, err := db.db.Exec(`DELETE FROM chunks WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("delete chunks: %w", err)
 	}
 	return nil
 }

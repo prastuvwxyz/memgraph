@@ -28,12 +28,20 @@ type ContextDef struct {
 	Root string `toml:"root"`
 }
 
+// EmbedConfig configures optional vector embedding for hybrid search.
+type EmbedConfig struct {
+	Provider string `toml:"provider"` // "openai" (default) or "google"
+	APIKey   string `toml:"api_key"`  // overridden by MEMGRAPH_EMBED_KEY env var
+	BaseURL  string `toml:"base_url"` // optional custom endpoint
+}
+
 // Config holds memgraph configuration values.
 type Config struct {
-	TopN     int                    `toml:"top_n"`
-	Format   string                 `toml:"format"`
-	Exclude  []string               `toml:"exclude"`
-	Contexts map[string]ContextDef  `toml:"contexts"`
+	TopN     int                   `toml:"top_n"`
+	Format   string                `toml:"format"`
+	Exclude  []string              `toml:"exclude"`
+	Contexts map[string]ContextDef `toml:"contexts"`
+	Embed    EmbedConfig           `toml:"embed"`
 }
 
 // Workspace is the loaded configuration together with the detected repo root.
@@ -126,6 +134,15 @@ func mergeFile(dst *Config, path string) error {
 		for k, v := range src.Contexts {
 			dst.Contexts[k] = v
 		}
+	}
+	if src.Embed.Provider != "" {
+		dst.Embed.Provider = src.Embed.Provider
+	}
+	if src.Embed.APIKey != "" {
+		dst.Embed.APIKey = src.Embed.APIKey
+	}
+	if src.Embed.BaseURL != "" {
+		dst.Embed.BaseURL = src.Embed.BaseURL
 	}
 	return nil
 }

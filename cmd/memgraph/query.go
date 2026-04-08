@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
+	"github.com/prastuvwxyz/memgraph/internal/embed"
 	"github.com/prastuvwxyz/memgraph/internal/index"
 	"github.com/prastuvwxyz/memgraph/internal/rank"
 	"github.com/spf13/cobra"
@@ -75,7 +76,12 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	results, err := rank.Search(db.SqlDB(), query, rank.SearchOpts{TopN: queryTop, Prefix: ctxPrefix})
+	emb := resolveEmbedder(workspace.Config.Embed)
+	results, err := rank.Search(db.SqlDB(), query, rank.SearchOpts{
+		TopN:     queryTop,
+		Prefix:   ctxPrefix,
+		Embedder: emb,
+	})
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
@@ -101,6 +107,28 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// resolveEmbedder builds an Embedder from config + MEMGRAPH_EMBED_KEY env var.
+// Returns nil if no API key is available (BM25-only mode).
+func resolveEmbedder(cfg config.EmbedConfig) embed.Embedder {
+	key := cfg.APIKey
+	if envKey := os.Getenv("MEMGRAPH_EMBED_KEY"); envKey != "" {
+		key = envKey
+	}
+	if key == "" {
+		return nil
+	}
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "openai"
+	}
+	switch provider {
+	case "google":
+		return embed.NewGoogle(key, cfg.BaseURL)
+	default:
+		return embed.NewOpenAI(key, cfg.BaseURL)
+	}
 }
 
 func printTable(results []rank.Result) {
