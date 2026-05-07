@@ -28,13 +28,15 @@ linters:
           disabled: true
     gocritic: {}
 
+  exclusions:
+    rules:
+      - linters: [errcheck]
+        text: 'Error return value of .*(Close|Flush) is not checked'
+
 formatters:
   enable:
     - goimports
 
 issues:
-  exclude-rules:
-    - linters: [errcheck]
-      text: 'Error return value of .*(Close|Flush) is not checked'
   max-issues-per-linter: 0
   max-same-issues: 0
