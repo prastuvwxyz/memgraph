@@ -540,19 +540,7 @@ func cosineSim(a, b []float32) float32 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	denom := sqrtF64(na) * sqrtF64(nb)
-	return float32(dot / denom)
-}
-
-func sqrtF64(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x / 2
-	for i := 0; i < 50; i++ {
-		z -= (z*z - x) / (2 * z)
-	}
-	return z
+	return float32(dot / (math.Sqrt(na) * math.Sqrt(nb)))
 }
 
 func parseTags(tagsJSON string) []string {
