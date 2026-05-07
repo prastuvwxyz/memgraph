@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 var indexVerbose bool
 var indexNamespace string
 
