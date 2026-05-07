@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -547,19 +548,9 @@ func parseTags(tagsJSON string) []string {
 	if tagsJSON == "" || tagsJSON == "null" {
 		return nil
 	}
-	// Simple JSON array parse — avoid importing encoding/json for this.
-	s := strings.TrimSpace(tagsJSON)
-	if !strings.HasPrefix(s, "[") {
-		return nil
-	}
-	s = s[1 : len(s)-1]
 	var tags []string
-	for _, part := range strings.Split(s, ",") {
-		t := strings.TrimSpace(part)
-		t = strings.Trim(t, `"`)
-		if t != "" {
-			tags = append(tags, t)
-		}
+	if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
+		return nil
 	}
 	return tags
 }
