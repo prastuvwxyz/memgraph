@@ -28,6 +28,7 @@ type SearchOpts struct {
 	TopN              int            // max results (0 = default 5)
 	Prefix            string         // if non-empty, restrict to paths with this prefix
 	Namespaces        []string       // if non-empty, restrict to these namespaces; empty = all
+	Tags              []string       // if non-empty, only return files containing ALL these tags
 	Hops              int            // BFS graph traversal depth (0 = disabled)
 	After             int64          // unix timestamp lower bound on last_indexed (0 = no filter)
 	Before            int64          // unix timestamp upper bound on last_indexed (0 = no filter)
@@ -198,11 +199,36 @@ func Search(db *sql.DB, query string, opts SearchOpts) ([]Result, error) {
 		})
 	}
 
+	// Tag filter: keep only results that contain ALL required tags.
+	if len(opts.Tags) > 0 {
+		filtered := results[:0]
+		for _, r := range results {
+			if hasAllTags(r.Tags, opts.Tags) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 	if len(results) > topN {
 		results = results[:topN]
 	}
 	return results, nil
+}
+
+// hasAllTags returns true if all required tags are present in the result tags.
+func hasAllTags(have, required []string) bool {
+	haveSet := make(map[string]struct{}, len(have))
+	for _, t := range have {
+		haveSet[strings.ToLower(t)] = struct{}{}
+	}
+	for _, t := range required {
+		if _, ok := haveSet[strings.ToLower(t)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // pathScores holds the best BM25 and vector score for a path (rolled up from chunks).
