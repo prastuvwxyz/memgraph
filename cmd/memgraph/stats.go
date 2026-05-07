@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,11 +12,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var statsJSON bool
+
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show index statistics",
 	Args:  cobra.NoArgs,
 	RunE:  runStats,
+}
+
+func init() {
+	statsCmd.Flags().BoolVar(&statsJSON, "json", false, "output as JSON")
 }
 
 func runStats(cmd *cobra.Command, args []string) error {
@@ -56,6 +63,18 @@ func runStats(cmd *cobra.Command, args []string) error {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		return fmt.Errorf("stat db: %w", err)
+	}
+
+	if statsJSON {
+		out := map[string]any{
+			"files_indexed": fileCount,
+			"index_size_bytes": dbSize,
+			"index_path":    dbPath,
+			"last_modified": info.ModTime().Format(time.RFC3339),
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
 	}
 
 	fmt.Println("memgraph index stats")
