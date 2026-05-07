@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ var (
 	similarTop       int
 	similarThreshold float64
 	similarNs        []string
+	similarJSON      bool
 )
 
 var similarCmd = &cobra.Command{
@@ -35,6 +37,7 @@ func init() {
 	similarCmd.Flags().IntVar(&similarTop, "top", 5, "number of results to return")
 	similarCmd.Flags().Float64Var(&similarThreshold, "threshold", 0.0, "minimum score threshold (0.0–1.0, 0 = show all)")
 	similarCmd.Flags().StringArrayVar(&similarNs, "ns", nil, "filter by namespace(s)")
+	similarCmd.Flags().BoolVar(&similarJSON, "json", false, "output as JSON")
 }
 
 func runSimilar(cmd *cobra.Command, args []string) error {
@@ -94,6 +97,38 @@ func runSimilar(cmd *cobra.Command, args []string) error {
 	maxScore := results[0].Score
 	if maxScore == 0 {
 		maxScore = 1
+	}
+
+	if similarJSON {
+		type jsonResult struct {
+			Path       string  `json:"path"`
+			Score      float64 `json:"score"`
+			Similarity float64 `json:"similarity"`
+			Confidence string  `json:"confidence"`
+			Tags       []string `json:"tags"`
+		}
+		var out []jsonResult
+		shown := 0
+		for _, r := range results {
+			norm := r.Score / maxScore
+			if norm < similarThreshold {
+				continue
+			}
+			out = append(out, jsonResult{
+				Path:       r.Path,
+				Score:      r.Score,
+				Similarity: norm,
+				Confidence: confidenceLabel(norm),
+				Tags:       r.Tags,
+			})
+			shown++
+			if shown >= similarTop {
+				break
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
 	}
 
 	// Print header.
