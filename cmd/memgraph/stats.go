@@ -67,10 +67,10 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	if statsJSON {
 		out := map[string]any{
-			"files_indexed": fileCount,
+			"files_indexed":    fileCount,
 			"index_size_bytes": dbSize,
-			"index_path":    dbPath,
-			"last_modified": info.ModTime().Format(time.RFC3339),
+			"index_path":       dbPath,
+			"last_modified":    info.ModTime().Format(time.RFC3339),
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -85,4 +85,3 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
-

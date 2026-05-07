@@ -23,9 +23,9 @@ type ParsedFile struct {
 }
 
 var (
-	reH1          = regexp.MustCompile(`(?m)^#\s+(.+)$`)
-	reWikilink    = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
-	reMdLink      = regexp.MustCompile(`\[(?:[^\]]*)\]\(([^)]+)\)`)
+	reH1           = regexp.MustCompile(`(?m)^#\s+(.+)$`)
+	reWikilink     = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	reMdLink       = regexp.MustCompile(`\[(?:[^\]]*)\]\(([^)]+)\)`)
 	reLastVerified = regexp.MustCompile(`<!--\s*last-verified:\s*(\d{4}-\d{2}-\d{2})\s*-->`)
 )
 
@@ -105,10 +105,11 @@ func extractFrontmatter(content string) (tags []string, body string) {
 
 // parseTags extracts tags from a YAML frontmatter string.
 // Supports both:
-//   tags: [a, b, c]
-//   tags:
-//     - a
-//     - b
+//
+//	tags: [a, b, c]
+//	tags:
+//	  - a
+//	  - b
 func parseTags(fm string) []string {
 	lines := strings.Split(fm, "\n")
 
@@ -133,18 +134,20 @@ func parseTags(fm string) []string {
 
 		// Block format: next lines are "  - tag"
 		var tags []string
+	parseLoop:
 		for j := i + 1; j < len(lines); j++ {
 			l := lines[j]
 			stripped := strings.TrimSpace(l)
-			if strings.HasPrefix(stripped, "- ") {
+			switch {
+			case strings.HasPrefix(stripped, "- "):
 				tag := strings.TrimSpace(strings.TrimPrefix(stripped, "- "))
 				if tag != "" {
 					tags = append(tags, tag)
 				}
-			} else if stripped == "" {
-				continue
-			} else {
-				break
+			case stripped == "":
+				// empty line: keep scanning
+			default:
+				break parseLoop
 			}
 		}
 		return tags
@@ -215,7 +218,7 @@ func StripMarkdown(s string) string {
 	// Remove fenced code blocks (``` or ~~~)
 	reCodeFence := regexp.MustCompile("(?ms)^```.*?^```\\s*$")
 	s = reCodeFence.ReplaceAllString(s, "")
-	reCodeFence2 := regexp.MustCompile("(?ms)^~~~.*?^~~~\\s*$")
+	reCodeFence2 := regexp.MustCompile(`(?ms)^~~~.*?^~~~\s*$`)
 	s = reCodeFence2.ReplaceAllString(s, "")
 
 	// Remove inline code

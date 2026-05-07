@@ -158,7 +158,7 @@ func TestStats(t *testing.T) {
 	db, _ := tempDB(t)
 
 	for i := 0; i < 3; i++ {
-		f := makeFile(filepath.Join("/notes", filepath.Join("note"+string(rune('a'+i))+".md")), "cs"+string(rune('a'+i)))
+		f := makeFile(filepath.Join("/notes", "note"+string(rune('a'+i))+".md"), "cs"+string(rune('a'+i)))
 		if _, err := db.IndexFile(context.Background(), f, "", nil); err != nil {
 			t.Fatalf("IndexFile %d: %v", i, err)
 		}

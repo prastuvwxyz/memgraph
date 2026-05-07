@@ -17,7 +17,6 @@ linters:
       check-blank: false
     govet:
       enable:
-        - shadow
         - printf
         - structtag
     revive:

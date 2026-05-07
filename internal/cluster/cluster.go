@@ -41,7 +41,7 @@ func Content(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluster, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type docTerms struct {
 		path string
@@ -178,7 +178,7 @@ func Tag(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluster, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tagFiles := map[string][]string{}
 	fileAllTags := map[string][]string{}
@@ -298,7 +298,7 @@ func Vector(db *sql.DB, prefix string, namespaces []string, k int) ([]Cluster, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type fileVec struct {
 		path string

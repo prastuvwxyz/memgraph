@@ -48,9 +48,9 @@ type mcpRequest struct {
 
 // mcpResponse is a JSON-RPC 2.0 response.
 type mcpResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      any    `json:"id"`
-	Result  any    `json:"result,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id"`
+	Result  any       `json:"result,omitempty"`
 	Error   *mcpError `json:"error,omitempty"`
 }
 

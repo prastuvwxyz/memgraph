@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	_ "embed"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
 	"github.com/prastuvwxyz/memgraph/internal/index"
