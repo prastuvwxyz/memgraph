@@ -51,11 +51,12 @@ type lintNote struct {
 }
 
 type lintResult struct {
-	Total      int        `json:"total"`
-	Orphaned   []string   `json:"orphaned"`    // 0 out, 0 in
-	NoBacklink []string   `json:"no_backlink"` // has outbound, nothing links back
+	Total      int          `json:"total"`
+	Orphaned   []string     `json:"orphaned"`    // 0 out, 0 in
+	NoBacklink []string     `json:"no_backlink"` // has outbound, nothing links back
+	SinkNodes  []string     `json:"sink_nodes"`  // has backlinks, 0 outbound
 	Stale      []staleEntry `json:"stale"`
-	Healthy    int        `json:"healthy"`
+	Healthy    int          `json:"healthy"`
 }
 
 type staleEntry struct {
@@ -159,6 +160,9 @@ func runLint(cmd *cobra.Command, args []string) error {
 		} else if outDeg > 0 && inDeg == 0 {
 			result.NoBacklink = append(result.NoBacklink, n.Path)
 			unhealthy[n.Path] = true
+		} else if outDeg == 0 && inDeg > 0 {
+			result.SinkNodes = append(result.SinkNodes, n.Path)
+			unhealthy[n.Path] = true
 		}
 
 		age := now - n.LastIndexed
@@ -173,6 +177,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 
 	sort.Strings(result.Orphaned)
 	sort.Strings(result.NoBacklink)
+	sort.Strings(result.SinkNodes)
 	sort.Slice(result.Stale, func(i, j int) bool {
 		return result.Stale[i].DaysAgo > result.Stale[j].DaysAgo
 	})
@@ -211,6 +216,17 @@ func printLintResult(r lintResult, staleDays int) {
 	} else {
 		fmt.Printf("⚠  No backlinks (%d) — has outbound links but nothing links back:\n", len(r.NoBacklink))
 		for _, p := range r.NoBacklink {
+			fmt.Printf("   → %s\n", p)
+		}
+	}
+	fmt.Println()
+
+	// Sink nodes
+	if len(r.SinkNodes) == 0 {
+		fmt.Println("✓ Sink nodes: none")
+	} else {
+		fmt.Printf("⚠  Sink nodes (%d) — has backlinks but no outbound links (dead ends):\n", len(r.SinkNodes))
+		for _, p := range r.SinkNodes {
 			fmt.Printf("   → %s\n", p)
 		}
 	}
