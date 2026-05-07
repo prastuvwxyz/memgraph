@@ -22,6 +22,7 @@ var (
 	queryTop              int
 	queryFormat           string
 	queryNamespaces       []string
+	queryTags             []string
 	queryHops             int
 	queryAfter            string
 	queryBefore           string
@@ -40,6 +41,7 @@ func init() {
 	queryCmd.Flags().IntVar(&queryTop, "top", 5, "number of results to return")
 	queryCmd.Flags().StringVar(&queryFormat, "format", "table", "output format: table, json, paths, csv")
 	queryCmd.Flags().StringArrayVar(&queryNamespaces, "ns", nil, "filter by namespace(s); repeatable: --ns stella --ns shared")
+	queryCmd.Flags().StringArrayVar(&queryTags, "tag", nil, "filter results to files containing ALL these tags; repeatable: --tag kubernetes --tag networking")
 	queryCmd.Flags().IntVar(&queryHops, "hops", 0, "BFS graph traversal depth beyond initial results (0 = disabled)")
 	queryCmd.Flags().StringVar(&queryAfter, "after", "", "only files indexed after this date (YYYY-MM-DD)")
 	queryCmd.Flags().StringVar(&queryBefore, "before", "", "only files indexed before this date (YYYY-MM-DD)")
@@ -106,6 +108,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		TopN:             queryTop,
 		Prefix:           ctxPrefix,
 		Namespaces:       queryNamespaces,
+		Tags:             queryTags,
 		Hops:             queryHops,
 		After:            afterTS,
 		Before:           beforeTS,
