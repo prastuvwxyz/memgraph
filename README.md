@@ -392,6 +392,64 @@ A typical agent pattern: run `memgraph query` first, read only the returned file
 
 ---
 
+## Integrating with AI Assistants
+
+### Claude Code (MCP)
+
+memgraph ships a native MCP stdio server. Add it to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "memgraph": {
+      "command": "memgraph",
+      "args": ["mcp", "--dir", "/path/to/your/vault"]
+    }
+  }
+}
+```
+
+This exposes three tools that Claude can call automatically during any conversation:
+
+| Tool | Description |
+|------|-------------|
+| `memgraph_query` | BM25+vector search with `--tag` and `--ns` filters |
+| `memgraph_similar` | Find files similar to a text snippet |
+| `memgraph_stats` | Index statistics |
+
+Once configured, Claude Code will retrieve relevant context from your vault before answering questions — without sending every file to the model.
+
+### OpenAI / Gemini (function calling)
+
+For OpenAI and Gemini, define memgraph as a tool in your client code and run the subprocess yourself when the model requests it:
+
+```python
+import subprocess, json
+
+def memgraph_query(topic: str, top: int = 5) -> str:
+    result = subprocess.check_output(
+        ["memgraph", "query", topic, "--format", "json", "--top", str(top)],
+        cwd="/path/to/your/vault"
+    )
+    return result.decode()
+```
+
+Pass this as a function definition to `openai.chat.completions.create(tools=...)` or `genai.GenerativeModel(tools=...)`. The model returns a tool call; your loop executes it and feeds the result back.
+
+### Live re-indexing (`watch`)
+
+Keep the index fresh while you write notes:
+
+```sh
+memgraph watch ~/notes
+# Watching /Users/you/notes — press Ctrl+C to stop
+#   indexed  knowledge/new-note.md
+#   indexed  runbooks/deploy.md
+# Re-indexed 2 file(s)
+```
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
