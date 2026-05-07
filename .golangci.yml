@@ -1,5 +1,7 @@
+version: "2"
+
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
@@ -11,25 +13,25 @@ linters:
     - revive
     - gocritic
 
-linters-settings:
-  errcheck:
-    check-type-assertions: false
-    check-blank: false
-  govet:
-    enable:
-      - shadow
-      - printf
-      - structtag
-  revive:
-    rules:
-      - name: exported
-        disabled: true
-      - name: package-comments
-        disabled: true
-  gocritic:
-    disabled-checks:
-      - hugeParam
-      - rangeValCopy
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    govet:
+      enable:
+        - shadow
+        - printf
+        - structtag
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    gocritic:
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
 
 issues:
   exclude-rules:
