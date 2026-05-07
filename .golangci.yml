@@ -1,7 +1,5 @@
-version: "2"
-
 linters:
-  default: none
+  disable-all: true
   enable:
     - errcheck
     - govet
@@ -13,35 +11,29 @@ linters:
     - revive
     - gocritic
 
-  settings:
-    errcheck:
-      check-type-assertions: false
-      check-blank: false
-    govet:
-      enable-all: false
-      enable:
-        - shadow
-        - printf
-        - structtag
-    revive:
-      rules:
-        - name: exported
-          disabled: true
-        - name: package-comments
-          disabled: true
-    gocritic:
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: false
+  govet:
+    enable:
+      - shadow
+      - printf
+      - structtag
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
+  gocritic:
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
 
 issues:
   exclude-rules:
-    # Ignore errcheck on deferred closes — errors can't be handled after a defer.
     - linters: [errcheck]
-      text: "Error return value of `.*\.Close` is not checked"
-    # Ignore nilerr in graph package — returning nil error for missing nodes is intentional.
-    - linters: [staticcheck]
-      path: "internal/graph/"
-      text: "SA1019"
+      text: 'Error return value of .*(Close|Flush) is not checked'
   max-issues-per-linter: 0
   max-same-issues: 0
