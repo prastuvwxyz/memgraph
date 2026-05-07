@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +38,7 @@ var queryCmd = &cobra.Command{
 func init() {
 	queryCmd.Flags().StringVar(&queryCtx, "ctx", "", "named context to search within")
 	queryCmd.Flags().IntVar(&queryTop, "top", 5, "number of results to return")
-	queryCmd.Flags().StringVar(&queryFormat, "format", "table", "output format: table, json, paths")
+	queryCmd.Flags().StringVar(&queryFormat, "format", "table", "output format: table, json, paths, csv")
 	queryCmd.Flags().StringArrayVar(&queryNamespaces, "ns", nil, "filter by namespace(s); repeatable: --ns stella --ns shared")
 	queryCmd.Flags().IntVar(&queryHops, "hops", 0, "BFS graph traversal depth beyond initial results (0 = disabled)")
 	queryCmd.Flags().StringVar(&queryAfter, "after", "", "only files indexed after this date (YYYY-MM-DD)")
@@ -129,6 +131,19 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		for _, r := range results {
 			fmt.Println(r.Path)
 		}
+
+	case "csv":
+		w := csv.NewWriter(os.Stdout)
+		_ = w.Write([]string{"path", "score", "tags", "reason"})
+		for _, r := range results {
+			_ = w.Write([]string{
+				r.Path,
+				strconv.FormatFloat(r.Score, 'f', 4, 64),
+				strings.Join(r.Tags, ";"),
+				r.Reason,
+			})
+		}
+		w.Flush()
 
 	default: // table
 		printTable(results)
