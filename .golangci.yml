@@ -7,9 +7,7 @@ linters:
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - goimports
     - revive
     - gocritic
 
@@ -28,10 +26,11 @@ linters:
           disabled: true
         - name: package-comments
           disabled: true
-    gocritic:
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
+    gocritic: {}
+
+formatters:
+  enable:
+    - goimports
 
 issues:
   exclude-rules:
