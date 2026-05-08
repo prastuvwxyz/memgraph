@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -10,9 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
+	"github.com/prastuvwxyz/memgraph/internal/graph"
 	"github.com/prastuvwxyz/memgraph/internal/index"
 	"github.com/prastuvwxyz/memgraph/internal/rank"
 	"github.com/spf13/cobra"
@@ -35,25 +34,6 @@ var serveCmd = &cobra.Command{
 func init() {
 	serveCmd.Flags().IntVar(&servePort, "port", 7331, "port to listen on")
 	serveCmd.Flags().BoolVar(&serveOpen, "open", true, "open browser automatically")
-}
-
-type graphNode struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title"`
-	Tags      []string `json:"tags"`
-	Group     string   `json:"group"`
-	Namespace string   `json:"namespace"`
-	Links     int      `json:"links"`
-}
-
-type graphLink struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-}
-
-type graphData struct {
-	Nodes []graphNode `json:"nodes"`
-	Links []graphLink `json:"links"`
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -87,14 +67,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(indexHTML)
+		_, _ = w.Write(indexHTML)
 	})
 
 	mux.HandleFunc("/api/graph", func(w http.ResponseWriter, r *http.Request) {
 		ns := r.URL.Query().Get("ns")
-		data, buildErr := buildGraphData(sqlDB, ns)
-		if buildErr != nil {
-			http.Error(w, buildErr.Error(), http.StatusInternalServerError)
+		data, err := graph.BuildData(sqlDB, ns)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -102,9 +82,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	})
 
 	mux.HandleFunc("/api/namespaces", func(w http.ResponseWriter, r *http.Request) {
-		rows, qErr := sqlDB.Query(`SELECT DISTINCT namespace FROM notes ORDER BY namespace`)
-		if qErr != nil {
-			http.Error(w, qErr.Error(), http.StatusInternalServerError)
+		rows, err := sqlDB.Query(`SELECT DISTINCT namespace FROM notes ORDER BY namespace`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -126,9 +106,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			_, _ = w.Write([]byte("[]"))
 			return
 		}
-		results, searchErr := rank.Search(sqlDB, q, rank.SearchOpts{TopN: 20})
-		if searchErr != nil {
-			http.Error(w, searchErr.Error(), http.StatusInternalServerError)
+		results, err := rank.Search(sqlDB, q, rank.SearchOpts{TopN: 20})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -145,76 +125,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return http.ListenAndServe(addr, mux)
-}
-
-func buildGraphData(db *sql.DB, nsFilter string) (*graphData, error) {
-	q := `SELECT path, title, tags, links_out, namespace FROM notes`
-	var args []any
-	if nsFilter != "" {
-		q += ` WHERE namespace = ?`
-		args = append(args, nsFilter)
-	}
-	rows, err := db.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	pathSet := make(map[string]bool)
-	var nodes []graphNode
-	var allLinks []graphLink
-
-	for rows.Next() {
-		var path, title, tagsJSON, linksJSON, namespace string
-		if err := rows.Scan(&path, &title, &tagsJSON, &linksJSON, &namespace); err != nil {
-			return nil, err
-		}
-
-		pathSet[path] = true
-
-		tags := parseTags(tagsJSON)
-		group := pathGroup(path)
-
-		var rawLinks []string
-		if linksJSON != "" && linksJSON != "null" {
-			json.Unmarshal([]byte(linksJSON), &rawLinks)
-		}
-
-		nodes = append(nodes, graphNode{
-			ID:        path,
-			Title:     title,
-			Tags:      tags,
-			Group:     group,
-			Namespace: namespace,
-			Links:     len(rawLinks),
-		})
-
-		for _, target := range rawLinks {
-			allLinks = append(allLinks, graphLink{Source: path, Target: target})
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Only include links where both endpoints are indexed.
-	validLinks := make([]graphLink, 0, len(allLinks))
-	for _, l := range allLinks {
-		if pathSet[l.Target] {
-			validLinks = append(validLinks, l)
-		}
-	}
-
-	return &graphData{Nodes: nodes, Links: validLinks}, nil
-}
-
-func pathGroup(path string) string {
-	idx := strings.IndexByte(path, '/')
-	if idx < 0 {
-		return "root"
-	}
-	return path[:idx]
 }
 
 func openBrowser(url string) {
