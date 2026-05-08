@@ -67,10 +67,10 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	if statsJSON {
 		out := map[string]any{
-			"files_indexed": fileCount,
+			"files_indexed":    fileCount,
 			"index_size_bytes": dbSize,
-			"index_path":    dbPath,
-			"last_modified": info.ModTime().Format(time.RFC3339),
+			"index_path":       dbPath,
+			"last_modified":    info.ModTime().Format(time.RFC3339),
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -84,23 +84,4 @@ func runStats(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Last modified:  %s\n", info.ModTime().Format(time.DateTime))
 
 	return nil
-}
-
-// formatSize returns a human-readable file size string.
-func formatSize(bytes int64) string {
-	const (
-		kb = 1024
-		mb = 1024 * kb
-		gb = 1024 * mb
-	)
-	switch {
-	case bytes >= gb:
-		return fmt.Sprintf("%.1f GB", float64(bytes)/gb)
-	case bytes >= mb:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/mb)
-	case bytes >= kb:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/kb)
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
 }

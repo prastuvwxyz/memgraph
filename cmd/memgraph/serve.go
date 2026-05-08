@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	_ "embed"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
 	"github.com/prastuvwxyz/memgraph/internal/index"
@@ -98,7 +98,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(data)
+		_ = json.NewEncoder(w).Encode(data)
 	})
 
 	mux.HandleFunc("/api/namespaces", func(w http.ResponseWriter, r *http.Request) {
@@ -116,14 +116,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ns)
+		_ = json.NewEncoder(w).Encode(ns)
 	})
 
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		if q == "" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("[]"))
+			_, _ = w.Write([]byte("[]"))
 			return
 		}
 		results, searchErr := rank.Search(sqlDB, q, rank.SearchOpts{TopN: 20})
@@ -132,7 +132,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
+		_ = json.NewEncoder(w).Encode(results)
 	})
 
 	addr := fmt.Sprintf(":%d", servePort)
@@ -172,7 +172,7 @@ func buildGraphData(db *sql.DB, nsFilter string) (*graphData, error) {
 
 		pathSet[path] = true
 
-		tags := parseTagsJSON(tagsJSON)
+		tags := parseTags(tagsJSON)
 		group := pathGroup(path)
 
 		var rawLinks []string
@@ -209,15 +209,6 @@ func buildGraphData(db *sql.DB, nsFilter string) (*graphData, error) {
 	return &graphData{Nodes: nodes, Links: validLinks}, nil
 }
 
-func parseTagsJSON(tagsJSON string) []string {
-	if tagsJSON == "" || tagsJSON == "null" {
-		return nil
-	}
-	var tags []string
-	json.Unmarshal([]byte(tagsJSON), &tags)
-	return tags
-}
-
 func pathGroup(path string) string {
 	idx := strings.IndexByte(path, '/')
 	if idx < 0 {
@@ -236,5 +227,5 @@ func openBrowser(url string) {
 	default:
 		return
 	}
-	c.Start()
+	_ = c.Start()
 }

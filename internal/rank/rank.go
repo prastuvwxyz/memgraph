@@ -25,15 +25,15 @@ const (
 
 // SearchOpts configures a Search call.
 type SearchOpts struct {
-	TopN              int            // max results (0 = default 5)
-	Prefix            string         // if non-empty, restrict to paths with this prefix
-	Namespaces        []string       // if non-empty, restrict to these namespaces; empty = all
-	Tags              []string       // if non-empty, only return files containing ALL these tags
-	Hops              int            // BFS graph traversal depth (0 = disabled)
-	After             int64          // unix timestamp lower bound on last_indexed (0 = no filter)
-	Before            int64          // unix timestamp upper bound on last_indexed (0 = no filter)
-	SkipConsolidated  bool           // exclude files with consolidated_at IS NOT NULL
-	Embedder          embed.Embedder // optional; enables vector search when non-nil
+	TopN             int            // max results (0 = default 5)
+	Prefix           string         // if non-empty, restrict to paths with this prefix
+	Namespaces       []string       // if non-empty, restrict to these namespaces; empty = all
+	Tags             []string       // if non-empty, only return files containing ALL these tags
+	Hops             int            // BFS graph traversal depth (0 = disabled)
+	After            int64          // unix timestamp lower bound on last_indexed (0 = no filter)
+	Before           int64          // unix timestamp upper bound on last_indexed (0 = no filter)
+	SkipConsolidated bool           // exclude files with consolidated_at IS NOT NULL
+	Embedder         embed.Embedder // optional; enables vector search when non-nil
 }
 
 // Result is a single search result with a blended relevance score.
@@ -311,7 +311,7 @@ func searchChunks(db *sql.DB, query string, opts SearchOpts) (map[string]*pathSc
 		vs := vectorByChunk[id]
 		bs := bm25ByChunk[id]
 		if maxBM25 > 0 {
-			bs = bs / maxBM25
+			bs /= maxBM25
 		}
 
 		var combined float32
@@ -538,9 +538,9 @@ func bfsExpand(db *sql.DB, byPath map[string]*raw, ordered *[]*raw, hops int, na
 					continue
 				}
 				r := &raw{
-					path:        link,
-					bm25:        parentScore * decay,
-					graphBoost:  0.5,
+					path:       link,
+					bm25:       parentScore * decay,
+					graphBoost: 0.5,
 				}
 				byPath[link] = r
 				*ordered = append(*ordered, r)

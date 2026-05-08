@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prastuvwxyz/memgraph/internal/chunk"
 	"github.com/prastuvwxyz/memgraph/internal/embed"
 	"github.com/prastuvwxyz/memgraph/internal/parse"
-	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 

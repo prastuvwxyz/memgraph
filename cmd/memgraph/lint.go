@@ -60,8 +60,8 @@ type lintResult struct {
 }
 
 type staleEntry struct {
-	Path     string `json:"path"`
-	DaysAgo  int    `json:"days_ago"`
+	Path    string `json:"path"`
+	DaysAgo int    `json:"days_ago"`
 }
 
 func runLint(cmd *cobra.Command, args []string) error {
@@ -154,13 +154,14 @@ func runLint(cmd *cobra.Command, args []string) error {
 		outDeg := len(n.LinksOut)
 		inDeg := len(backlinks[n.Path])
 
-		if outDeg == 0 && inDeg == 0 {
+		switch {
+		case outDeg == 0 && inDeg == 0:
 			result.Orphaned = append(result.Orphaned, n.Path)
 			unhealthy[n.Path] = true
-		} else if outDeg > 0 && inDeg == 0 {
+		case outDeg > 0 && inDeg == 0:
 			result.NoBacklink = append(result.NoBacklink, n.Path)
 			unhealthy[n.Path] = true
-		} else if outDeg == 0 && inDeg > 0 {
+		case outDeg == 0 && inDeg > 0:
 			result.SinkNodes = append(result.SinkNodes, n.Path)
 			unhealthy[n.Path] = true
 		}

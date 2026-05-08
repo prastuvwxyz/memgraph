@@ -33,7 +33,7 @@ func openWorkspaceDB(dir string) (*index.DB, *config.Workspace, error) {
 	workspace := config.LoadOrDefault(abs)
 	dbPath := filepath.Join(workspace.Root, ".memgraph", "index.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("no index found — run: memgraph index .")
+		return nil, nil, fmt.Errorf("no index found — run: memgraph index")
 	}
 	db, err := index.Open(dbPath)
 	if err != nil {

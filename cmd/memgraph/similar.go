@@ -101,10 +101,10 @@ func runSimilar(cmd *cobra.Command, args []string) error {
 
 	if similarJSON {
 		type jsonResult struct {
-			Path       string  `json:"path"`
-			Score      float64 `json:"score"`
-			Similarity float64 `json:"similarity"`
-			Confidence string  `json:"confidence"`
+			Path       string   `json:"path"`
+			Score      float64  `json:"score"`
+			Similarity float64  `json:"similarity"`
+			Confidence string   `json:"confidence"`
 			Tags       []string `json:"tags"`
 		}
 		var out []jsonResult
