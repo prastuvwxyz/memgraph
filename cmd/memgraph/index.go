@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
@@ -59,8 +58,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Embedding enabled: %s\n", emb.ModelName())
 	}
 
-	// Build namespace resolver: config-based prefix map takes precedence over --ns flag.
-	nsResolver := buildNSResolver(workspace.Root, workspace.Config.Namespaces, indexNamespace)
+	nsResolver := config.ResolveNS(workspace.Config.Namespaces, indexNamespace)
 
 	start := time.Now()
 	totalUpdated, totalFiles, err := index.Walk(db, abs, workspace.Config.Exclude, indexVerbose, nsResolver, emb)
@@ -74,35 +72,3 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// buildNSResolver returns a function that maps a root-relative file path to its namespace.
-// Priority: config namespace map > --ns flag > "" (global).
-func buildNSResolver(root string, nsMap map[string][]string, flagNS string) func(string) string {
-	if len(nsMap) == 0 {
-		return func(string) string { return flagNS }
-	}
-	// Pre-normalise prefixes: strip trailing slash, convert to slash-separated.
-	type entry struct {
-		ns     string
-		prefix string
-	}
-	var entries []entry
-	for ns, paths := range nsMap {
-		for _, p := range paths {
-			prefix := filepath.ToSlash(filepath.Clean(p))
-			if prefix == "." {
-				continue
-			}
-			entries = append(entries, entry{ns, prefix + "/"})
-		}
-	}
-	_ = root // root available if needed for abs-path comparisons
-	return func(rel string) string {
-		relSlash := filepath.ToSlash(rel)
-		for _, e := range entries {
-			if strings.HasPrefix(relSlash+"/", e.prefix) || strings.HasPrefix(relSlash, e.prefix) {
-				return e.ns
-			}
-		}
-		return flagNS
-	}
-}

@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/prastuvwxyz/memgraph/internal/config"
 	"github.com/prastuvwxyz/memgraph/internal/index"
+	"github.com/prastuvwxyz/memgraph/internal/lint"
 	"github.com/spf13/cobra"
 )
 
@@ -42,28 +41,6 @@ func init() {
 	lintCmd.Flags().StringArrayVar(&lintExclude, "exclude", nil, "exclude path prefixes (e.g. memory/ docs/ agents/)")
 }
 
-type lintNote struct {
-	Path        string
-	Namespace   string
-	Title       string
-	LinksOut    []string
-	LastIndexed int64
-}
-
-type lintResult struct {
-	Total      int          `json:"total"`
-	Orphaned   []string     `json:"orphaned"`    // 0 out, 0 in
-	NoBacklink []string     `json:"no_backlink"` // has outbound, nothing links back
-	SinkNodes  []string     `json:"sink_nodes"`  // has backlinks, 0 outbound
-	Stale      []staleEntry `json:"stale"`
-	Healthy    int          `json:"healthy"`
-}
-
-type staleEntry struct {
-	Path    string `json:"path"`
-	DaysAgo int    `json:"days_ago"`
-}
-
 func runLint(cmd *cobra.Command, args []string) error {
 	dir := "."
 	if dirFlag != "" {
@@ -87,101 +64,14 @@ func runLint(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	sqlDB := db.SqlDB()
-
-	// Build query — optionally filter by namespace
-	query := `SELECT path, namespace, title, links_out, last_indexed FROM notes`
-	var queryArgs []any
-	if len(lintNs) > 0 {
-		placeholders := make([]string, len(lintNs))
-		for i, ns := range lintNs {
-			placeholders[i] = "?"
-			queryArgs = append(queryArgs, ns)
-		}
-		query += ` WHERE namespace IN (` + strings.Join(placeholders, ",") + `)`
-	}
-
-	rows, err := sqlDB.Query(query, queryArgs...)
-	if err != nil {
-		return fmt.Errorf("query notes: %w", err)
-	}
-	defer rows.Close()
-
-	var notes []lintNote
-	for rows.Next() {
-		var n lintNote
-		var linksJSON string
-		if err := rows.Scan(&n.Path, &n.Namespace, &n.Title, &linksJSON, &n.LastIndexed); err != nil {
-			return fmt.Errorf("scan: %w", err)
-		}
-		// Skip excluded prefixes
-		excluded := false
-		for _, ex := range lintExclude {
-			if strings.HasPrefix(n.Path, ex) {
-				excluded = true
-				break
-			}
-		}
-		if excluded {
-			continue
-		}
-		if linksJSON != "" && linksJSON != "null" {
-			_ = json.Unmarshal([]byte(linksJSON), &n.LinksOut)
-		}
-		notes = append(notes, n)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows: %w", err)
-	}
-
-	// Build backlink index: path → set of files that link to it
-	backlinks := make(map[string][]string)
-	for _, n := range notes {
-		for _, target := range n.LinksOut {
-			backlinks[target] = append(backlinks[target], n.Path)
-		}
-	}
-
-	now := time.Now().Unix()
-	staleThreshold := int64(lintStaleDays) * 86400
-
-	result := lintResult{}
-	result.Total = len(notes)
-
-	unhealthy := make(map[string]bool)
-
-	for _, n := range notes {
-		outDeg := len(n.LinksOut)
-		inDeg := len(backlinks[n.Path])
-
-		switch {
-		case outDeg == 0 && inDeg == 0:
-			result.Orphaned = append(result.Orphaned, n.Path)
-			unhealthy[n.Path] = true
-		case outDeg > 0 && inDeg == 0:
-			result.NoBacklink = append(result.NoBacklink, n.Path)
-			unhealthy[n.Path] = true
-		case outDeg == 0 && inDeg > 0:
-			result.SinkNodes = append(result.SinkNodes, n.Path)
-			unhealthy[n.Path] = true
-		}
-
-		age := now - n.LastIndexed
-		if age > staleThreshold {
-			daysAgo := int(age / 86400)
-			result.Stale = append(result.Stale, staleEntry{Path: n.Path, DaysAgo: daysAgo})
-			unhealthy[n.Path] = true
-		}
-	}
-
-	result.Healthy = result.Total - len(unhealthy)
-
-	sort.Strings(result.Orphaned)
-	sort.Strings(result.NoBacklink)
-	sort.Strings(result.SinkNodes)
-	sort.Slice(result.Stale, func(i, j int) bool {
-		return result.Stale[i].DaysAgo > result.Stale[j].DaysAgo
+	result, err := lint.Analyze(db.SqlDB(), lint.Opts{
+		Namespaces: lintNs,
+		Exclude:    lintExclude,
+		StaleDays:  lintStaleDays,
 	})
+	if err != nil {
+		return fmt.Errorf("analyze: %w", err)
+	}
 
 	if lintJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -189,18 +79,17 @@ func runLint(cmd *cobra.Command, args []string) error {
 		return enc.Encode(result)
 	}
 
-	printLintResult(result, lintStaleDays)
+	printLintResult(result)
 	return nil
 }
 
-func printLintResult(r lintResult, staleDays int) {
+func printLintResult(r *lint.Result) {
 	nsLabel := ""
 	if len(lintNs) > 0 {
 		nsLabel = fmt.Sprintf(" [ns: %s]", strings.Join(lintNs, ", "))
 	}
 	fmt.Printf("memgraph lint — %d files%s\n\n", r.Total, nsLabel)
 
-	// Orphaned
 	if len(r.Orphaned) == 0 {
 		fmt.Println("✓ Orphaned nodes: none")
 	} else {
@@ -211,7 +100,6 @@ func printLintResult(r lintResult, staleDays int) {
 	}
 	fmt.Println()
 
-	// No backlinks
 	if len(r.NoBacklink) == 0 {
 		fmt.Println("✓ No-backlink nodes: none")
 	} else {
@@ -222,7 +110,6 @@ func printLintResult(r lintResult, staleDays int) {
 	}
 	fmt.Println()
 
-	// Sink nodes
 	if len(r.SinkNodes) == 0 {
 		fmt.Println("✓ Sink nodes: none")
 	} else {
@@ -233,18 +120,16 @@ func printLintResult(r lintResult, staleDays int) {
 	}
 	fmt.Println()
 
-	// Stale
 	if len(r.Stale) == 0 {
-		fmt.Printf("✓ Stale files: none (threshold: %d days)\n", staleDays)
+		fmt.Printf("✓ Stale files: none (threshold: %d days)\n", lintStaleDays)
 	} else {
-		fmt.Printf("⚠  Stale (%d) — not re-indexed in %d+ days:\n", len(r.Stale), staleDays)
+		fmt.Printf("⚠  Stale (%d) — not re-indexed in %d+ days:\n", len(r.Stale), lintStaleDays)
 		for _, s := range r.Stale {
 			fmt.Printf("   → %s (%d days ago)\n", s.Path, s.DaysAgo)
 		}
 	}
 	fmt.Println()
 
-	// Summary
 	healthPct := 0
 	if r.Total > 0 {
 		healthPct = r.Healthy * 100 / r.Total
