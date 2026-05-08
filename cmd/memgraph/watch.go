@@ -144,7 +144,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 				}
 				parsed.Path = rel
 
-				nsResolver := buildNSResolver(workspace.Root, workspace.Config.Namespaces, "")
+				nsResolver := config.ResolveNS(workspace.Config.Namespaces, "")
 				updated, err := db.IndexFile(context.Background(), parsed, nsResolver(rel), emb)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  index error %s: %v\n", rel, err)
